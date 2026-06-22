@@ -1,0 +1,23 @@
+[package]
+name = "mockterm"
+version = "0.1.0"
+edition = "2021"
+description = "A GPU-accelerated terminal emulator in Rust with native, draggable pane splitting (Ghostty/iTerm2-style)."
+license = "MIT"
+
+[workspace]
+members = ["vendor/egui_term"]
+
+[dependencies]
+eframe = { version = "0.31", default-features = true }
+egui = "0.31"
+egui_term = { path = "vendor/egui_term" }
+anyhow = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+# Faster incremental dev builds of the heavy graphics deps.
+[profile.dev.package."*"]
+opt-level = 2
