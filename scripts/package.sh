@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Build mockterm.app (a real macOS application bundle) from the Rust binary,
+# Build Tessera.app (a real macOS application bundle) from the Rust binary,
 # generate its .icns icon from assets/icon.svg, ad-hoc code-sign it, and
 # optionally wrap it in a .dmg.
 #
 # Usage:
-#   scripts/package.sh           # build dist/mockterm.app
-#   scripts/package.sh --dmg     # also build dist/mockterm.dmg
+#   scripts/package.sh           # build dist/Tessera.app
+#   scripts/package.sh --dmg     # also build dist/Tessera.dmg
 #
 # Everything is produced under ./dist (git-ignored). Drag the .app to
 # /Applications, then pin it to the Dock.
@@ -14,9 +14,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
-APP_NAME="mockterm"
-BIN_NAME="mockterm"
-BUNDLE_ID="com.elstarkov.mockterm"
+APP_NAME="Tessera"
+BIN_NAME="tessera"
+BUNDLE_ID="com.elstarkov.tessera"
 VERSION="$(sed -n 's/^version *= *"\(.*\)".*/\1/p' Cargo.toml | head -1)"
 
 DIST="dist"

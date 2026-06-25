@@ -1,5 +1,5 @@
 [package]
-name = "mockterm"
+name = "tessera"
 version = "0.1.0"
 edition = "2021"
 description = "A GPU-accelerated terminal emulator in Rust with native, draggable pane splitting (Ghostty/iTerm2-style)."

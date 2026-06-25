@@ -1,4 +1,4 @@
-//! The mockterm application: owns the tabs (each a pane tree), the terminal
+//! The Tessera application: owns the tabs (each a pane tree), the terminal
 //! backends, and the eframe update loop that renders the active tab's panes,
 //! handles draggable dividers, routes keyboard shortcuts, and drains PTY events.
 
@@ -55,7 +55,7 @@ struct TabDrag {
     src: usize,
 }
 
-pub struct MockTerm {
+pub struct Tessera {
     tabs: Vec<Tab>,
     active: usize,
     /// All panes across all tabs, keyed by their globally-unique id.
@@ -101,7 +101,7 @@ const GUTTER: i8 = 8; // outer margin between the window edge and the panes
 const TAB_RADIUS: u8 = 8;
 const TAB_MIN_W: f32 = 150.0; // minimum tab width, so tabs feel roomy
 
-impl MockTerm {
+impl Tessera {
     pub fn new(cc: &eframe::CreationContext<'_>, cfg: Config) -> Self {
         let (pty_tx, pty_rx) = channel();
         let default_title = shell_basename(&cfg.shell);
@@ -173,7 +173,7 @@ impl MockTerm {
                 });
                 self.active = self.tabs.len() - 1;
             }
-            Err(e) => eprintln!("mockterm: failed to open tab: {e}"),
+            Err(e) => eprintln!("tessera: failed to open tab: {e}"),
         }
     }
 
@@ -226,7 +226,7 @@ impl MockTerm {
                 tab.tree.split(tab.focused, id, axis, true);
                 tab.focused = id;
             }
-            Err(e) => eprintln!("mockterm: failed to spawn pane: {e}"),
+            Err(e) => eprintln!("tessera: failed to spawn pane: {e}"),
         }
     }
 
@@ -569,7 +569,7 @@ impl MockTerm {
         let mut captured: Option<(usize, String)> = None;
         let mut result: Option<bool> = None; // Some(true)=confirm, Some(false)=cancel
         if let Some(ed) = &mut self.editing {
-            let resp = egui::Modal::new(Id::new("mockterm_rename")).show(ctx, |ui| {
+            let resp = egui::Modal::new(Id::new("tessera_rename")).show(ctx, |ui| {
                 ui.set_width(280.0);
                 ui.label(egui::RichText::new("Rename tab").strong().size(15.0));
                 ui.add_space(8.0);
@@ -621,7 +621,7 @@ impl MockTerm {
     }
 }
 
-impl eframe::App for MockTerm {
+impl eframe::App for Tessera {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_pty_events(ctx);
         // While the rename popup is open, shortcuts are frozen too.
@@ -713,7 +713,7 @@ impl eframe::App for MockTerm {
             // 2) Draggable dividers: the gap shows the window background, with a
             //    subtle rounded grip in the centre that lights up on hover/drag.
             for div in &dividers {
-                let id = Id::new(("mockterm_divider", active, div.node));
+                let id = Id::new(("tessera_divider", active, div.node));
                 let resp = ui.interact(div.rect, id, Sense::drag());
                 let hot = resp.hovered() || resp.dragged();
                 if hot {
@@ -764,7 +764,7 @@ impl eframe::App for MockTerm {
                 for (pane_id, rect) in &leaves {
                     let dz = ui.interact(
                         *rect,
-                        Id::new(("mockterm_drop", active, pane_id)),
+                        Id::new(("tessera_drop", active, pane_id)),
                         Sense::hover(),
                     );
                     let hovering = dz.dnd_hover_payload::<TabDrag>().is_some();
@@ -801,7 +801,7 @@ impl eframe::App for MockTerm {
                 let raw = tab.name.as_deref().unwrap_or(self.default_title.as_str());
                 let painter = ctx.layer_painter(egui::LayerId::new(
                     egui::Order::Tooltip,
-                    Id::new("mockterm_tab_drag_preview"),
+                    Id::new("tessera_tab_drag_preview"),
                 ));
                 let galley = painter.layout_no_wrap(
                     format!("{}  {}", drag.src + 1, truncate(raw, 24)),
