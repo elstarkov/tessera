@@ -16,9 +16,6 @@ dragging the borders between them, organise them into colourable, renamable,
 reorderable tabs, and drag a tab straight onto a pane to merge it in. Each pane
 is a real terminal running a real shell (or `tmux`).
 
-> _Tip: add a screenshot or a GIF of dragging a tab into a pane here — it sells
-> the whole thing._
-
 ## Features
 
 - **Native splits** — a binary tiling tree of panes, no `tmux` required. Each
@@ -51,7 +48,8 @@ is a real terminal running a real shell (or `tmux`).
 
 ## Run it
 
-Requires the [Rust toolchain](https://rustup.rs).
+Run Tessera straight from source — all you need is the
+[Rust toolchain](https://rustup.rs):
 
 ```sh
 git clone https://github.com/elstarkov/tessera
@@ -60,32 +58,22 @@ cargo run --release            # launches your $SHELL
 cargo run --release -- --help  # usage
 ```
 
-### Build a real macOS app
-
-```sh
-scripts/package.sh             # -> dist/Tessera.app  (universal: arm64 + Intel)
-scripts/package.sh --dmg       # also produces dist/Tessera.dmg
-cp -R dist/Tessera.app /Applications/   # then pin it to the Dock
-```
-
-The `.app` is **ad-hoc signed**, so it runs on your own Mac. Distributing it to
-others without Gatekeeper warnings requires an Apple Developer ID signature +
-notarization.
+No install step, no app bundle, no Gatekeeper prompts — just clone and run.
 
 ## tmux
 
 Tessera gives you native GUI splits without tmux. To drive panes from tmux
 instead, run it as the command: `tessera tmux new -A -s main`.
 
-## Limitations (honest)
+## Limitations
 
 - **Fonts:** uses egui's bundled monospace with no font fallback yet, so Nerd
   Font icons, emoji, CJK, and powerline glyphs may not render. No ligatures.
 - **No config file** yet — font, theme, shell, and keybindings aren't
   customisable without editing the source.
 - **No inline images** (Sixel / kitty / iTerm protocols), no scrollback search.
-- **Not notarized or security-audited.** `cargo audit` is clean, but treat it
-  as a v0.1 hobby project, not hardened software.
+- **Not security-audited.** `cargo audit` is clean, but treat it as a v0.1
+  hobby project, not hardened software.
 
 ## Architecture
 
