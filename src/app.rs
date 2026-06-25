@@ -147,7 +147,7 @@ impl MockTerm {
             BackendSettings {
                 shell: self.cfg.shell.clone(),
                 args: self.cfg.args.clone(),
-                working_directory: None,
+                working_directory: default_working_dir(),
             },
         )?;
         self.panes.insert(
@@ -829,6 +829,17 @@ fn shell_basename(shell: &str) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or(shell)
         .to_string()
+}
+
+/// Directory new shells start in. Launched from a terminal we inherit the launch
+/// directory; launched from the Dock/Finder the process cwd is "/", which is a
+/// poor place to start a shell, so fall back to $HOME.
+fn default_working_dir() -> Option<std::path::PathBuf> {
+    use std::path::{Path, PathBuf};
+    match std::env::current_dir() {
+        Ok(cwd) if cwd != Path::new("/") => Some(cwd),
+        _ => std::env::var_os("HOME").map(PathBuf::from),
+    }
 }
 
 /// Decide which edge of `rect` the cursor is nearest, and translate that into a
