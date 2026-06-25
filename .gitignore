@@ -1,6 +1,9 @@
 # Rust build output
 /target
 
+# Packaging output (the .app / .dmg are built by scripts/package.sh)
+/dist
+
 # Rust backup files
 **/*.rs.bk
 
