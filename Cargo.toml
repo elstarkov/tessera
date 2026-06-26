@@ -13,6 +13,9 @@ eframe = { version = "0.31", default-features = true }
 egui = "0.31"
 egui_term = { path = "vendor/egui_term" }
 anyhow = "1.0"
+# Pure-Rust system font lookup, so `font-family` in the config can resolve an
+# installed font by name (no native deps).
+fontdb = "0.16"
 
 [profile.release]
 opt-level = 3
