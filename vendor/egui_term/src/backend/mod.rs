@@ -140,6 +140,10 @@ pub struct TerminalBackend {
     size: TerminalSize,
     notifier: Notifier,
     last_content: RenderableContent,
+    /// All matches for the current scrollback search, most-recent first, plus the
+    /// index of the focused one (mockterm patch).
+    search_matches: Vec<Match>,
+    search_index: usize,
 }
 
 impl TerminalBackend {
@@ -197,6 +201,8 @@ impl TerminalBackend {
             size: terminal_size,
             notifier,
             last_content: initial_content,
+            search_matches: Vec::new(),
+            search_index: 0,
         })
     }
 
@@ -276,6 +282,75 @@ impl TerminalBackend {
 
     pub fn last_content(&self) -> &RenderableContent {
         &self.last_content
+    }
+
+    /// Find the next scrollback match of `query` (mockterm patch). `forward`
+    /// searches toward newer output (down), else toward older (up). `reset`
+    /// restarts from the bottom - pass it when the query text changes. Scrolls
+    /// the viewport to the match and selects it (so it highlights via the normal
+    /// selection rendering). Returns whether a match was found.
+    pub fn search(&mut self, query: &str, forward: bool, reset: bool) -> (usize, usize) {
+        if query.is_empty() {
+            self.clear_search();
+            return (0, 0);
+        }
+        if reset {
+            self.rebuild_matches(query);
+        } else if !self.search_matches.is_empty() {
+            let n = self.search_matches.len();
+            self.search_index = if forward {
+                (self.search_index + n - 1) % n // toward newer (index 0)
+            } else {
+                (self.search_index + 1) % n // toward older
+            };
+        }
+        if self.search_matches.is_empty() {
+            return (0, 0);
+        }
+        self.jump_to(self.search_matches[self.search_index].clone());
+        (self.search_index + 1, self.search_matches.len())
+    }
+
+    /// Collect every match of `query` across the scrollback, most-recent first.
+    fn rebuild_matches(&mut self, query: &str) {
+        self.search_matches.clear();
+        self.search_index = 0;
+        let mut regex = match RegexSearch::new(query) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        let term = self.term.lock();
+        let (start, end) = {
+            let g = term.grid();
+            (
+                Point::new(g.topmost_line(), Column(0)),
+                Point::new(g.bottommost_line(), g.last_column()),
+            )
+        };
+        let mut matches: Vec<Match> =
+            RegexIter::new(start, end, Direction::Right, &term, &mut regex).collect();
+        drop(term);
+        matches.reverse(); // bottommost (most recent) first
+        self.search_matches = matches;
+    }
+
+    /// Scroll the viewport to a match and select it (so it highlights).
+    fn jump_to(&mut self, m: Match) {
+        let (start, end) = (*m.start(), *m.end());
+        let mut term = self.term.lock();
+        term.scroll_to_point(start);
+        let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
+        selection.update(end, Side::Right);
+        term.selection = Some(selection);
+    }
+
+    /// Clear the search highlight and return to the bottom of the scrollback.
+    pub fn clear_search(&mut self) {
+        self.search_matches.clear();
+        self.search_index = 0;
+        let mut term = self.term.lock();
+        term.selection = None;
+        term.scroll_display(Scroll::Bottom);
     }
 
     fn process_link_action(
