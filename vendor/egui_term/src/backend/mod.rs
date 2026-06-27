@@ -141,7 +141,7 @@ pub struct TerminalBackend {
     notifier: Notifier,
     last_content: RenderableContent,
     /// All matches for the current scrollback search, most-recent first, plus the
-    /// index of the focused one (mockterm patch).
+    /// index of the focused one (tessera patch).
     search_matches: Vec<Match>,
     search_index: usize,
 }
@@ -178,21 +178,37 @@ impl TerminalBackend {
         let notifier = Notifier(pty_event_loop.channel());
         let url_regex = RegexSearch::new(r#"(ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file://|git://|ssh:|ftp://)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>"\s{-}\^⟨⟩`]+"#).unwrap();
         let _pty_event_loop_thread = pty_event_loop.spawn();
-        let _pty_event_subscription = std::thread::Builder::new()
+        let subscription = std::thread::Builder::new()
             .name(format!("pty_event_subscription_{}", id))
             .spawn(move || loop {
-                if let Ok(event) = event_receiver.recv() {
-                    pty_event_proxy_sender
-                        .send((id, event.clone()))
-                        .unwrap_or_else(|_| {
-                            panic!("pty_event_subscription_{}: sending PtyEvent is failed", id)
-                        });
-                    app_context.clone().request_repaint();
-                    if let Event::Exit = event {
-                        break;
-                    }
+                // `recv()` returns Err once every sender is dropped, which happens
+                // when this pane's PTY event loop shuts down (i.e. the pane was
+                // closed). The old code ignored that and re-looped, so `recv()`
+                // returned Err immediately forever - a busy-spin that pegged a
+                // core for every closed pane. Break out of the loop instead.
+                let Ok(event) = event_receiver.recv() else {
+                    break;
+                };
+                // If the app side is gone (window closing) there's nobody left to
+                // forward to; stop the thread rather than panicking.
+                if pty_event_proxy_sender.send((id, event.clone())).is_err() {
+                    break;
                 }
-            })?;
+                app_context.clone().request_repaint();
+                if let Event::Exit = event {
+                    break;
+                }
+            });
+        // If the forwarder thread couldn't be spawned, the PTY event loop above
+        // is already running; tell it to shut down so its thread (and the PTY
+        // child) don't leak when we bail out of the constructor here.
+        let _pty_event_subscription = match subscription {
+            Ok(handle) => handle,
+            Err(e) => {
+                let _ = notifier.0.send(Msg::Shutdown);
+                return Err(e);
+            }
+        };
 
         Ok(Self {
             id,
@@ -284,7 +300,7 @@ impl TerminalBackend {
         &self.last_content
     }
 
-    /// Find the next scrollback match of `query` (mockterm patch). `forward`
+    /// Find the next scrollback match of `query` (tessera patch). `forward`
     /// searches toward newer output (down), else toward older (up). `reset`
     /// restarts from the bottom - pass it when the query text changes. Scrolls
     /// the viewport to the match and selects it (so it highlights via the normal
