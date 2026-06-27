@@ -17,8 +17,39 @@
 
 use std::path::PathBuf;
 
-use egui::Color32;
+use egui::{Color32, Key, Modifiers};
 use egui_term::ColorPalette;
+
+/// A parsed keybinding: the modifiers that must be held plus the trigger key.
+#[derive(Debug, Clone, Copy)]
+pub struct KeySpec {
+    pub mods: Modifiers,
+    pub key: Key,
+}
+
+/// The rebindable, discrete shortcuts. The numbered tab/pane switches
+/// (Cmd/Opt+1-9) and arrow navigation (Cmd+Alt+arrows) stay fixed.
+#[derive(Debug, Clone)]
+pub struct Keybinds {
+    pub new_tab: KeySpec,
+    pub split_right: KeySpec,
+    pub split_down: KeySpec,
+    pub close_pane: KeySpec,
+    pub find: KeySpec,
+}
+
+impl Default for Keybinds {
+    fn default() -> Self {
+        let cmd = Modifiers::COMMAND;
+        Self {
+            new_tab: KeySpec { mods: cmd, key: Key::T },
+            split_right: KeySpec { mods: cmd, key: Key::D },
+            split_down: KeySpec { mods: cmd | Modifiers::SHIFT, key: Key::D },
+            close_pane: KeySpec { mods: cmd, key: Key::W },
+            find: KeySpec { mods: cmd, key: Key::F },
+        }
+    }
+}
 
 /// Parsed, ready-to-apply user settings. Built from the config file (or all
 /// defaults if there isn't one).
@@ -31,6 +62,7 @@ pub struct Settings {
     pub shell: Option<String>,
     pub background: Option<String>,
     pub foreground: Option<String>,
+    pub keybinds: Keybinds,
 }
 
 impl Default for Settings {
@@ -43,6 +75,7 @@ impl Default for Settings {
             shell: None,
             background: None,
             foreground: None,
+            keybinds: Keybinds::default(),
         }
     }
 }
@@ -143,23 +176,23 @@ pub fn parse(text: &str) -> (Settings, Vec<String>) {
         };
         let key = key.trim();
         let val = unquote(val.trim());
-
-        // Parse a float, warning (and keeping the default) on failure.
-        let mut num = |target: &mut f32| match val.parse::<f32>() {
-            Ok(n) => *target = n,
-            Err(_) => warnings.push(format!("line {}: `{key}` needs a number, got `{val}`", i + 1)),
-        };
+        let line = i + 1;
 
         match key {
             "font-family" => s.font_family = some_unless_empty(val),
-            "font-size" => num(&mut s.font_size),
+            "font-size" => set_num(&mut s.font_size, val, key, line, &mut warnings),
             "theme" => s.theme = normalize_theme(val),
-            "window-padding-x" => num(&mut s.padding.0),
-            "window-padding-y" => num(&mut s.padding.1),
+            "window-padding-x" => set_num(&mut s.padding.0, val, key, line, &mut warnings),
+            "window-padding-y" => set_num(&mut s.padding.1, val, key, line, &mut warnings),
             "shell" | "command" => s.shell = some_unless_empty(val),
             "background" => s.background = some_unless_empty(val),
             "foreground" => s.foreground = some_unless_empty(val),
-            _ => warnings.push(format!("line {}: unknown key `{key}`", i + 1)),
+            "keybind-new-tab" => set_bind(&mut s.keybinds.new_tab, val, line, &mut warnings),
+            "keybind-split-right" => set_bind(&mut s.keybinds.split_right, val, line, &mut warnings),
+            "keybind-split-down" => set_bind(&mut s.keybinds.split_down, val, line, &mut warnings),
+            "keybind-close-pane" => set_bind(&mut s.keybinds.close_pane, val, line, &mut warnings),
+            "keybind-find" => set_bind(&mut s.keybinds.find, val, line, &mut warnings),
+            _ => warnings.push(format!("line {line}: unknown key `{key}`")),
         }
     }
     (s, warnings)
@@ -167,6 +200,59 @@ pub fn parse(text: &str) -> (Settings, Vec<String>) {
 
 fn some_unless_empty(val: &str) -> Option<String> {
     (!val.is_empty()).then(|| val.to_string())
+}
+
+/// Parse a float into `target`, warning (and keeping the default) on failure.
+fn set_num(target: &mut f32, val: &str, key: &str, line: usize, warns: &mut Vec<String>) {
+    match val.parse::<f32>() {
+        Ok(n) => *target = n,
+        Err(_) => warns.push(format!("line {line}: `{key}` needs a number, got `{val}`")),
+    }
+}
+
+/// Parse a keybinding into `target`, warning (and keeping the default) on failure.
+fn set_bind(target: &mut KeySpec, val: &str, line: usize, warns: &mut Vec<String>) {
+    match parse_keyspec(val) {
+        Some(spec) => *target = spec,
+        None => warns.push(format!("line {line}: couldn't parse keybinding `{val}`")),
+    }
+}
+
+/// Parse a keybinding like "cmd+shift+d" into modifiers + key. Modifier aliases:
+/// cmd / command / super, ctrl / control, alt / opt / option, shift. The final
+/// token is the key (a letter, digit, or an egui key name like "Enter").
+/// Case-insensitive. Returns `None` on any unrecognised token.
+pub fn parse_keyspec(s: &str) -> Option<KeySpec> {
+    let parts: Vec<&str> = s.split('+').map(str::trim).filter(|p| !p.is_empty()).collect();
+    let (key_tok, mod_toks) = parts.split_last()?;
+    let mut mods = Modifiers::default();
+    for m in mod_toks {
+        mods = mods
+            | match m.to_lowercase().as_str() {
+                "cmd" | "command" | "super" | "win" | "meta" => Modifiers::COMMAND,
+                "ctrl" | "control" => Modifiers::CTRL,
+                "alt" | "opt" | "option" => Modifiers::ALT,
+                "shift" => Modifiers::SHIFT,
+                _ => return None,
+            };
+    }
+    Some(KeySpec {
+        mods,
+        key: parse_key(key_tok)?,
+    })
+}
+
+fn parse_key(tok: &str) -> Option<Key> {
+    Key::from_name(tok).or_else(|| {
+        // Title-case fallback so "enter" / "esc" / "space" work, not just "Enter".
+        let mut chars = tok.chars();
+        let titled: String = chars
+            .next()?
+            .to_uppercase()
+            .chain(chars.flat_map(char::to_lowercase))
+            .collect();
+        Key::from_name(&titled)
+    })
 }
 
 /// Strip a single pair of surrounding double quotes, if present.
@@ -360,6 +446,14 @@ fn write_template(path: &std::path::Path) {
 # shell            = /bin/zsh
 # background       = #1e1e2e
 # foreground       = #cdd6f4
+
+# Keybindings. Modifiers: cmd / ctrl / alt (opt) / shift, then a key.
+# (Tab/pane switching with Cmd/Opt+1-9 and Cmd+Alt+arrows are fixed.)
+# keybind-new-tab     = cmd+t
+# keybind-split-right = cmd+d
+# keybind-split-down  = cmd+shift+d
+# keybind-close-pane  = cmd+w
+# keybind-find        = cmd+f
 ";
     let _ = std::fs::write(path, body);
 }
@@ -406,5 +500,39 @@ mod tests {
         assert!(parse_hex("#xyz").is_none());
         assert!(parse_hex("1e1e2e").is_none()); // missing '#'
         assert!(parse_hex("#fff").is_none()); // too short
+    }
+
+    #[test]
+    fn parses_keybindings() {
+        let cmd_shift_d = parse_keyspec("cmd+shift+d").unwrap();
+        assert_eq!(cmd_shift_d.key, Key::D);
+        assert!(cmd_shift_d.mods.command && cmd_shift_d.mods.shift && !cmd_shift_d.mods.alt);
+
+        // Aliases + case-insensitivity.
+        let opt_enter = parse_keyspec("Option+Enter").unwrap();
+        assert_eq!(opt_enter.key, Key::Enter);
+        assert!(opt_enter.mods.alt);
+
+        // A bare key with no modifiers is allowed.
+        assert_eq!(parse_keyspec("f5").unwrap().key, Key::F5);
+    }
+
+    #[test]
+    fn rejects_bad_keybindings() {
+        assert!(parse_keyspec("cmd+").is_none()); // no key
+        assert!(parse_keyspec("hyper+d").is_none()); // unknown modifier
+        assert!(parse_keyspec("cmd+notakey").is_none()); // unknown key
+    }
+
+    #[test]
+    fn keybind_overrides_default() {
+        let (s, warns) = parse("keybind-find = ctrl+s\n");
+        assert_eq!(s.keybinds.find.key, Key::S);
+        assert!(s.keybinds.find.mods.ctrl);
+        assert!(warns.is_empty());
+        // An unparseable bind warns and keeps the default (Cmd+F).
+        let (s, warns) = parse("keybind-find = wat\n");
+        assert_eq!(s.keybinds.find.key, Key::F);
+        assert_eq!(warns.len(), 1);
     }
 }

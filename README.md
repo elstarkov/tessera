@@ -84,6 +84,13 @@ window-padding-y = 8
 shell            = /bin/zsh
 background       = #1e1e2e   # optional, overrides the theme
 foreground       = #cdd6f4
+
+# Rebind the discrete shortcuts (modifiers: cmd / ctrl / alt / shift):
+keybind-new-tab     = cmd+t
+keybind-split-right = cmd+d
+keybind-split-down  = cmd+shift+d
+keybind-close-pane  = cmd+w
+keybind-find        = cmd+f
 ```
 
 Bundled themes: `default`, `catppuccin-mocha`, `dracula`, `nord`,
@@ -94,8 +101,9 @@ are reported on stderr and skipped - a broken config still gives you a terminal.
 
 - **Fonts:** Nerd Font icons and powerline glyphs render via a bundled symbols
   fallback. CJK and colour emoji still need their own fonts; no ligatures.
-- **Keybindings aren't configurable** yet (font, theme, shell, and padding are -
-  see [Configuration](#configuration)).
+- **Some shortcuts are fixed:** the discrete actions are rebindable (see
+  [Configuration](#configuration)), but tab/pane switching (Cmd/Opt+1-9) and
+  pane navigation (Cmd+Alt+arrows) aren't.
 - **No inline images** (Sixel / kitty / iTerm protocols).
 - **Not security-audited.** `cargo audit` is clean, but treat it as a v0.1
   hobby project, not hardened software.
@@ -128,6 +136,6 @@ Built in Rust, pair-programmed with [Claude Code](https://claude.com/claude-code
 ## Roadmap
 
 - Font fallback (Nerd Fonts / emoji / CJK) and ligatures
-- Configurable keybindings (font, theme, shell, padding already land via the config file)
+- Rebindable tab/pane number and arrow-navigation shortcuts (discrete actions already configurable)
 - tmux control-mode (`tmux -CC`) integration
 - Zoom a pane to fullscreen

@@ -16,7 +16,7 @@ use egui_term::{
     TerminalFont, TerminalTheme, TerminalView,
 };
 
-use crate::config::Settings;
+use crate::config::{Keybinds, KeySpec, Settings};
 use crate::layout::{neighbor, Axis, Dir, PaneId, Tree};
 
 /// Launch configuration (what each pane runs).
@@ -88,6 +88,8 @@ pub struct Tessera {
     bar_bg: Color32,   // tab strip + status bar
     /// Per-pane inner padding (window-padding-x / -y).
     pad: Vec2,
+    /// User-rebindable discrete shortcuts.
+    keybinds: Keybinds,
 }
 
 const ACCENT: Color32 = Color32::from_rgb(102, 161, 255);
@@ -168,6 +170,7 @@ impl Tessera {
             window_bg,
             bar_bg,
             pad: Vec2::new(settings.padding.0, settings.padding.1),
+            keybinds: settings.keybinds.clone(),
         };
         // First tab fills the window. If the shell can't spawn we can't do
         // anything useful, so fail loudly.
@@ -350,15 +353,15 @@ impl Tessera {
     /// Intercept multiplexer shortcuts before terminals see the key events.
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let cmd = Modifiers::COMMAND;
-        let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         let cmd_alt = Modifiers::COMMAND | Modifiers::ALT;
+        let kb = self.keybinds.clone();
 
         let hit = |mods: Modifiers, key: Key| -> bool {
             ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(mods, key)))
         };
 
-        // Tabs: new tab, and jump to tab N by number.
-        if hit(cmd, Key::T) {
+        // New tab (rebindable); jump to tab N by number (fixed).
+        if consume_keyspec(ctx, kb.new_tab) {
             self.new_tab(ctx);
         }
         const NUM_KEYS: [Key; 9] = [
@@ -389,21 +392,22 @@ impl Tessera {
             ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
         }
 
-        // Splits. Check Cmd+Shift+D *first* and let it consume the event: egui's
-        // shortcut matching is lenient about extra modifiers, so a plain Cmd+D
-        // pattern would otherwise also match (and swallow) Cmd+Shift+D.
-        if hit(cmd_shift, Key::D) {
+        // Splits (rebindable). Exact modifier matching keeps split-down
+        // (default Cmd+Shift+D) and split-right (default Cmd+D) from clobbering
+        // each other the way egui's lenient shortcut matching would.
+        if consume_keyspec(ctx, kb.split_down) {
             self.split(Axis::Vertical, ctx); // top / bottom
-        } else if hit(cmd, Key::D) {
+        }
+        if consume_keyspec(ctx, kb.split_right) {
             self.split(Axis::Horizontal, ctx); // side by side
         }
         // Close focused pane (collapses/removes its tab when it was the last).
-        if hit(cmd, Key::W) {
+        if consume_keyspec(ctx, kb.close_pane) {
             let pane = self.tabs[self.active].focused;
             self.close_pane(pane, ctx);
         }
         // Open scrollback search on the focused pane.
-        if hit(cmd, Key::F) {
+        if consume_keyspec(ctx, kb.find) {
             let pane = self.tabs[self.active].focused;
             self.search = Some(Search {
                 pane,
@@ -1171,6 +1175,33 @@ fn configure_style(ctx: &egui::Context, card: Color32) {
 fn darken(c: Color32, factor: f32) -> Color32 {
     let f = |v: u8| (v as f32 * factor).round().clamp(0.0, 255.0) as u8;
     Color32::from_rgb(f(c.r()), f(c.g()), f(c.b()))
+}
+
+/// Consume a key event that *exactly* matches `spec` (modifiers included), so it
+/// triggers the action and stays hidden from the terminal. Exact matching -
+/// unlike egui's lenient shortcut matching - lets Cmd+D and Cmd+Shift+D coexist.
+fn consume_keyspec(ctx: &egui::Context, spec: KeySpec) -> bool {
+    ctx.input_mut(|i| {
+        let mut hit = false;
+        i.events.retain(|e| match e {
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } if *key == spec.key && modifiers.matches_exact(spec.mods) => {
+                hit = true;
+                false // consume it
+            }
+            _ => true,
+        });
+        // On macOS an Alt-modified shortcut also queues a composed Text event
+        // (e.g. Alt+T -> "†"); drop it so it doesn't leak into the shell.
+        if hit && spec.mods.alt {
+            i.events.retain(|e| !matches!(e, egui::Event::Text(_)));
+        }
+        hit
+    })
 }
 
 /// Nudge a colour a few steps lighter, to lift a surface above the bars.
