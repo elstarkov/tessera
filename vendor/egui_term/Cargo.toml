@@ -2,7 +2,7 @@
 name = "egui_term"
 version = "0.1.0"
 edition = "2021"
-description = "Terminal emulator widget powered by egui + alacritty_terminal (vendored & patched for mockterm)."
+description = "Terminal emulator widget powered by egui + alacritty_terminal (vendored & patched for tessera)."
 license = "MIT"
 # Upstream: https://github.com/Harzu/egui_term (MIT). Vendored and modified locally.
 

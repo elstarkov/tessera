@@ -143,7 +143,7 @@ impl<'a> TerminalView<'a> {
         layout: &Response,
         state: &mut TerminalViewState,
     ) -> Self {
-        // mockterm patch: keyboard input follows the *focused* pane regardless
+        // tessera patch: keyboard input follows the *focused* pane regardless
         // of pointer position, but mouse interaction (clicks, selection, wheel)
         // is still gated on the pointer being over this pane - otherwise a click
         // in another split would drive a selection in the focused one.
