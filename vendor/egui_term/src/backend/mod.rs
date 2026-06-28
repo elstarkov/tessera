@@ -22,6 +22,7 @@ use std::borrow::Cow;
 use std::cmp::min;
 use std::io::Result;
 use std::ops::{Index, RangeInclusive};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{mpsc, Arc};
 
@@ -140,6 +141,11 @@ pub struct TerminalBackend {
     size: TerminalSize,
     notifier: Notifier,
     last_content: RenderableContent,
+    /// Set whenever the terminal grid (cells or scroll position) actually changes,
+    /// so sync() can skip re-cloning the whole grid on repaints where nothing
+    /// changed (mouse move, hover, idle, a sibling pane's output). Set by the PTY
+    /// event thread and by the scroll/resize/search paths; cleared by sync().
+    dirty: Arc<AtomicBool>,
     /// All matches for the current scrollback search, most-recent first, plus the
     /// index of the focused one (tessera patch).
     search_matches: Vec<Match>,
@@ -178,6 +184,11 @@ impl TerminalBackend {
         let notifier = Notifier(pty_event_loop.channel());
         let url_regex = RegexSearch::new(r#"(ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file://|git://|ssh:|ftp://)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>"\s{-}\^⟨⟩`]+"#).unwrap();
         let _pty_event_loop_thread = pty_event_loop.spawn();
+        // Shared with the PTY event thread; every event means the grid changed, so
+        // the next sync() must re-clone it. Start dirty so the first sync captures
+        // the shell's startup output.
+        let dirty = Arc::new(AtomicBool::new(true));
+        let thread_dirty = dirty.clone();
         let subscription = std::thread::Builder::new()
             .name(format!("pty_event_subscription_{}", id))
             .spawn(move || loop {
@@ -189,6 +200,7 @@ impl TerminalBackend {
                 let Ok(event) = event_receiver.recv() else {
                     break;
                 };
+                thread_dirty.store(true, Ordering::Relaxed);
                 // If the app side is gone (window closing) there's nobody left to
                 // forward to; stop the thread rather than panicking.
                 if pty_event_proxy_sender.send((id, event.clone())).is_err() {
@@ -217,6 +229,7 @@ impl TerminalBackend {
             size: terminal_size,
             notifier,
             last_content: initial_content,
+            dirty,
             search_matches: Vec::new(),
             search_index: 0,
         })
@@ -229,19 +242,29 @@ impl TerminalBackend {
             BackendCommand::Write(input) => {
                 self.write(input);
                 term.scroll_display(Scroll::Bottom);
+                self.dirty.store(true, Ordering::Relaxed);
             },
             BackendCommand::Scroll(delta) => {
                 self.scroll(&mut term, delta);
+                self.dirty.store(true, Ordering::Relaxed);
             },
             BackendCommand::Resize(layout_size, font_size) => {
+                // resize() sets `dirty` itself, but only when the size actually
+                // changes - this command is issued every frame, so we must not
+                // mark dirty unconditionally here.
                 self.resize(&mut term, layout_size, font_size);
             },
             BackendCommand::SelectStart(selection_type, x, y) => {
                 self.start_selection(&mut term, selection_type, x, y);
+                self.dirty.store(true, Ordering::Relaxed);
             },
             BackendCommand::SelectUpdate(x, y) => {
                 self.update_selection(&mut term, x, y);
+                self.dirty.store(true, Ordering::Relaxed);
             },
+            // Link hover/clear only touch the overlay (recomputed each sync) and
+            // mouse reports are echoed back by the app as PTY output (a Wakeup),
+            // so neither needs to force a grid re-clone.
             BackendCommand::ProcessLink(link_action, point) => {
                 self.process_link_action(&term, link_action, point);
             },
@@ -288,7 +311,12 @@ impl TerminalBackend {
         };
 
         let cursor = terminal.grid_mut().cursor_cell().clone();
-        self.last_content.grid = terminal.grid().clone();
+        // The full grid clone (up to ~10k scrollback rows) is the expensive part,
+        // so only pay it when the grid actually changed since the last sync. The
+        // cheap fields below are refreshed every time so selection/cursor stay live.
+        if self.dirty.swap(false, Ordering::Relaxed) {
+            self.last_content.grid = terminal.grid().clone();
+        }
         self.last_content.selectable_range = selectable_range;
         self.last_content.cursor = cursor.clone();
         self.last_content.terminal_mode = *terminal.mode();
@@ -358,6 +386,7 @@ impl TerminalBackend {
         let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
         selection.update(end, Side::Right);
         term.selection = Some(selection);
+        self.dirty.store(true, Ordering::Relaxed); // scrolled the viewport
     }
 
     /// Clear the search highlight and return to the bottom of the scrollback.
@@ -367,6 +396,7 @@ impl TerminalBackend {
         let mut term = self.term.lock();
         term.selection = None;
         term.scroll_display(Scroll::Bottom);
+        self.dirty.store(true, Ordering::Relaxed); // scrolled to the bottom
     }
 
     fn process_link_action(
@@ -569,6 +599,7 @@ impl TerminalBackend {
                 self.size.num_cols as usize,
                 self.size.num_lines as usize,
             ));
+            self.dirty.store(true, Ordering::Relaxed);
         }
     }
 
