@@ -1,3 +1,4 @@
+use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::Point as TerminalGridPoint;
 use alacritty_terminal::term::cell;
 use alacritty_terminal::term::TermMode;
@@ -34,6 +35,10 @@ pub struct TerminalViewState {
     is_dragged: bool,
     scroll_pixels: f32,
     current_mouse_position_on_grid: TerminalGridPoint,
+    /// `ctx.input().time` of the most recent scroll gesture, used to fade the
+    /// auto-hiding scrollbars in and out (tessera). Defaults to 0.0, which reads
+    /// as "scrolled long ago" so the bars start hidden.
+    last_scroll_time: f64,
 }
 
 pub struct TerminalView<'a> {
@@ -173,6 +178,10 @@ impl<'a> TerminalView<'a> {
                     }
                 },
                 egui::Event::MouseWheel { unit, delta, .. } if hovered => {
+                    // A wheel gesture over this pane lights up the auto-hiding
+                    // scrollbar - even if the scroll is clamped at the top/bottom,
+                    // so it behaves the same as iTerm2 (tessera).
+                    state.last_scroll_time = layout.ctx.input(|i| i.time);
                     input_actions.push(process_mouse_wheel(
                         state,
                         self.font.font_type().size,
@@ -348,6 +357,108 @@ impl<'a> TerminalView<'a> {
         }
 
         painter.extend(shapes);
+
+        // tessera: iTerm2-style auto-hiding scrollbars, painted over the content.
+        let fg = self.theme.get_color(Color::Named(NamedColor::Foreground));
+        draw_scrollbars(
+            state.last_scroll_time,
+            layout,
+            painter,
+            fg,
+            content.grid.total_lines(),
+            content.grid.screen_lines(),
+            content.grid.display_offset(),
+            content.grid.columns(),
+            cell_width,
+        );
+    }
+}
+
+/// iTerm2-style overlay scrollbars: a slim thumb that shows up only while you're
+/// scrolling a scrollable pane and fades out shortly after you stop. Drawn on top
+/// of the terminal content and non-interactive - a pure position indicator.
+#[allow(clippy::too_many_arguments)]
+fn draw_scrollbars(
+    last_scroll_time: f64,
+    layout: &Response,
+    painter: &Painter,
+    fg: egui::Color32,
+    total_lines: usize,
+    visible_lines: usize,
+    v_offset: usize,
+    columns: usize,
+    cell_width: f32,
+) {
+    // Fade out almost as soon as scrolling stops. HOLD is kept just long enough
+    // to bridge the gap between discrete wheel notches so the bar doesn't flicker
+    // mid-scroll; FADE is a quick dissolve once you actually stop.
+    const HOLD: f64 = 0.1; // stay fully opaque this long after the last scroll
+    const FADE: f64 = 0.18; // then dissolve over this long
+    const THICKNESS: f32 = 6.0;
+    const MARGIN: f32 = 3.0;
+    const MIN_THUMB: f32 = 24.0;
+
+    let ctx = &layout.ctx;
+    let now = ctx.input(|i| i.time);
+    let since = now - last_scroll_time;
+    let alpha = if since <= HOLD {
+        1.0
+    } else {
+        (1.0 - (since - HOLD) / FADE).clamp(0.0, 1.0)
+    };
+    if alpha <= 0.0 {
+        return;
+    }
+    // Drive the fade. The app only repaints on input, so without this the bar
+    // would freeze at full opacity: during the hold we wake exactly when the fade
+    // is due to start, and during the fade we repaint every frame for smoothness.
+    if since <= HOLD {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(HOLD - since + 1e-3));
+    } else {
+        ctx.request_repaint();
+    }
+
+    let color =
+        egui::Color32::from_rgba_unmultiplied(fg.r(), fg.g(), fg.b(), (alpha * 140.0) as u8);
+    let rect = layout.rect;
+    let pill = CornerRadius::same((THICKNESS / 2.0) as u8);
+
+    // Vertical: only when there's scrollback above/below the viewport.
+    if total_lines > visible_lines {
+        let track = rect.height() - 2.0 * MARGIN;
+        if track > MIN_THUMB {
+            let (pos, size_frac) = v_thumb(total_lines, visible_lines, v_offset);
+            let thumb = (track * size_frac).max(MIN_THUMB).min(track);
+            let y = rect.top() + MARGIN + pos * (track - thumb);
+            let x = rect.right() - MARGIN - THICKNESS;
+            painter.rect_filled(
+                Rect::from_min_size(Pos2::new(x, y), Vec2::new(THICKNESS, thumb)),
+                pill,
+                color,
+            );
+        }
+    }
+
+    // Horizontal: terminals reflow text to the pane width, so content fits
+    // horizontally by construction and this normally stays hidden. We still draw
+    // it symmetrically if the grid ever reports more columns than fit (e.g. for a
+    // frame mid-resize, before the PTY catches up); the +1-cell threshold keeps
+    // sub-cell rounding from flickering it on.
+    let content_w = columns as f32 * cell_width;
+    if content_w > rect.width() + cell_width {
+        let track = rect.width() - 2.0 * MARGIN;
+        if track > MIN_THUMB {
+            let size_frac = (rect.width() / content_w).clamp(0.0, 1.0);
+            let thumb = (track * size_frac).max(MIN_THUMB).min(track);
+            // The grid has no horizontal scroll offset, so the view is pinned left.
+            let x = rect.left() + MARGIN;
+            let y = rect.bottom() - MARGIN - THICKNESS;
+            painter.rect_filled(
+                Rect::from_min_size(Pos2::new(x, y), Vec2::new(thumb, THICKNESS)),
+                pill,
+                color,
+            );
+        }
     }
 }
 
@@ -650,4 +761,58 @@ fn process_mouse_move(
     }
 
     actions
+}
+
+/// Vertical scrollbar geometry from the grid's scroll state, decoupled from
+/// painting so the (easy-to-invert) `display_offset` math can be unit-tested.
+///
+/// `total` is every line in the buffer (scrollback + viewport), `visible` is the
+/// viewport height, and `offset` is alacritty's `display_offset` (0 = pinned to
+/// the newest line, growing as you scroll back). Returns `(pos, size_frac)` where
+/// `size_frac` is the thumb length as a fraction of the track and `pos` is its
+/// travel along the track: 0.0 at the oldest line (top), 1.0 at the newest
+/// (bottom).
+fn v_thumb(total: usize, visible: usize, offset: usize) -> (f32, f32) {
+    let size_frac = (visible as f32 / total as f32).clamp(0.0, 1.0);
+    // Lines hidden above the viewport, as a fraction of the whole buffer.
+    let top_frac =
+        total.saturating_sub(visible).saturating_sub(offset) as f32 / total as f32;
+    let pos = if size_frac < 1.0 {
+        (top_frac / (1.0 - size_frac)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (pos, size_frac)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::v_thumb;
+
+    #[test]
+    fn thumb_size_is_visible_over_total() {
+        let (_, size) = v_thumb(400, 100, 0);
+        assert!((size - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn at_bottom_offset_zero_thumb_is_at_the_end() {
+        // display_offset 0 means we're pinned to the newest output.
+        let (pos, _) = v_thumb(400, 100, 0);
+        assert!((pos - 1.0).abs() < 1e-6, "pos = {pos}");
+    }
+
+    #[test]
+    fn scrolled_to_the_top_thumb_is_at_the_start() {
+        // Max offset = history = total - visible: the oldest line is in view.
+        let (pos, _) = v_thumb(400, 100, 300);
+        assert!(pos.abs() < 1e-6, "pos = {pos}");
+    }
+
+    #[test]
+    fn halfway_scrolled_thumb_is_centered() {
+        // Half of the 300 lines of history scrolled back.
+        let (pos, _) = v_thumb(400, 100, 150);
+        assert!((pos - 0.5).abs() < 1e-6, "pos = {pos}");
+    }
 }
