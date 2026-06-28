@@ -451,6 +451,10 @@ impl Tessera {
                 let radius = CornerRadius::same(TAB_RADIUS);
                 // Rects of each tab in order, for the reorder insertion indicator.
                 let mut tab_rects: Vec<Rect> = Vec::new();
+                // The tab currently being torn out (if any) - its slot is drawn as
+                // a faint gap, since the tab itself floats under the cursor.
+                let dragged_src =
+                    egui::DragAndDrop::payload::<TabDrag>(ui.ctx()).map(|d| d.src);
 
                 for (i, tab) in self.tabs.iter().enumerate() {
                     let selected = i == self.active;
@@ -475,31 +479,43 @@ impl Tessera {
                     let (rect, resp) =
                         ui.allocate_exact_size(egui::vec2(width, 30.0), Sense::click_and_drag());
                     tab_rects.push(rect);
-                    let fill = if selected {
-                        TAB_SEL
-                    } else if resp.hovered() {
-                        TAB_HOVER
-                    } else {
-                        TAB_IDLE
-                    };
-                    ui.painter().rect_filled(rect, radius, fill);
-                    if let Some(c) = tab.color {
-                        // Tint the whole tab and add a solid colour bar along the
-                        // bottom, so the colour reads whether or not it's active.
-                        let a = if selected { 120 } else { 70 };
-                        ui.painter().rect_filled(
+                    if dragged_src == Some(i) {
+                        // This tab is lifted out and floating under the cursor;
+                        // leave a faint recessed gap where it normally sits.
+                        ui.painter().rect_filled(rect, radius, Color32::from_black_alpha(45));
+                        ui.painter().rect_stroke(
                             rect,
                             radius,
-                            Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a),
+                            Stroke::new(1.0, Color32::from_white_alpha(16)),
+                            StrokeKind::Inside,
                         );
-                        let bar = Rect::from_min_max(
-                            pos2(rect.left() + 8.0, rect.bottom() - 4.0),
-                            pos2(rect.right() - 8.0, rect.bottom() - 2.0),
-                        );
-                        ui.painter().rect_filled(bar, CornerRadius::same(1), c);
+                    } else {
+                        let fill = if selected {
+                            TAB_SEL
+                        } else if resp.hovered() {
+                            TAB_HOVER
+                        } else {
+                            TAB_IDLE
+                        };
+                        ui.painter().rect_filled(rect, radius, fill);
+                        if let Some(c) = tab.color {
+                            // Tint the whole tab and add a solid colour bar along the
+                            // bottom, so the colour reads whether or not it's active.
+                            let a = if selected { 120 } else { 70 };
+                            ui.painter().rect_filled(
+                                rect,
+                                radius,
+                                Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a),
+                            );
+                            let bar = Rect::from_min_max(
+                                pos2(rect.left() + 8.0, rect.bottom() - 4.0),
+                                pos2(rect.right() - 8.0, rect.bottom() - 2.0),
+                            );
+                            ui.painter().rect_filled(bar, CornerRadius::same(1), c);
+                        }
+                        ui.painter()
+                            .galley(rect.center() - galley.size() * 0.5, galley, text_color);
                     }
-                    ui.painter()
-                        .galley(rect.center() - galley.size() * 0.5, galley, text_color);
 
                     if resp.double_clicked() {
                         start_edit = Some((i, display.to_string()));
@@ -1072,25 +1088,71 @@ impl eframe::App for Tessera {
             self.merge_tab(src, target_pane, axis, after);
         }
 
-        // Floating chip that follows the cursor while dragging a tab.
-        if let Some(drag) = egui::DragAndDrop::payload::<TabDrag>(ctx) {
-            if let (Some(pos), Some(tab)) = (ctx.pointer_latest_pos(), self.tabs.get(drag.src)) {
+        // Floating, translucent copy of the dragged tab that follows the cursor -
+        // iTerm2-style "lift", so it's obvious the tab is grabbed and droppable.
+        // On pick-up it eases up (grows slightly + casts a shadow); the slot it
+        // came from shows a faint gap (see draw_tab_strip). The body is kept
+        // semi-transparent so the content behind it shows through.
+        let dragging = egui::DragAndDrop::payload::<TabDrag>(ctx).map(|d| d.src);
+        let lift =
+            ctx.animate_bool_with_time(Id::new("tessera_tab_lift"), dragging.is_some(), 0.12);
+        if let (Some(src), Some(pos)) = (dragging, ctx.pointer_latest_pos()) {
+            if let Some(tab) = self.tabs.get(src) {
                 let raw = tab.name.as_deref().unwrap_or(self.default_title.as_str());
                 let painter = ctx.layer_painter(egui::LayerId::new(
                     egui::Order::Tooltip,
                     Id::new("tessera_tab_drag_preview"),
                 ));
+                // Rebuild the tab at its real size, so it reads as the same tab
+                // lifted off the strip rather than a generic chip.
                 let galley = painter.layout_no_wrap(
-                    format!("{}  {}", drag.src + 1, truncate(raw, 24)),
+                    format!("{}  {}", src + 1, truncate(raw, 24)),
                     FontId::proportional(14.0),
                     Color32::WHITE,
                 );
-                let rect = Rect::from_min_size(
-                    pos + egui::vec2(12.0, 10.0),
-                    galley.size() + egui::vec2(20.0, 12.0),
+                let width = (galley.size().x + 36.0).max(TAB_MIN_W);
+                let size = Vec2::new(width, 30.0) * (1.0 + 0.04 * lift);
+                let rect = Rect::from_center_size(pos, size);
+                let radius = CornerRadius::same(TAB_RADIUS);
+
+                // Soft drop shadow, fading in as the tab lifts.
+                if lift > 0.0 {
+                    painter.rect_filled(
+                        rect.translate(Vec2::new(0.0, 4.0 * lift)).expand(1.0),
+                        radius,
+                        Color32::from_black_alpha((70.0 * lift) as u8),
+                    );
+                }
+                // Translucent body - you can see what's behind it.
+                painter.rect_filled(
+                    rect,
+                    radius,
+                    Color32::from_rgba_unmultiplied(TAB_SEL.r(), TAB_SEL.g(), TAB_SEL.b(), 170),
                 );
-                painter.rect_filled(rect, CornerRadius::same(TAB_RADIUS), TAB_SEL);
-                painter.galley(rect.center() - galley.size() * 0.5, galley, Color32::WHITE);
+                if let Some(c) = tab.color {
+                    painter.rect_filled(
+                        rect,
+                        radius,
+                        Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 110),
+                    );
+                    let bar = Rect::from_min_max(
+                        pos2(rect.left() + 8.0, rect.bottom() - 4.0),
+                        pos2(rect.right() - 8.0, rect.bottom() - 2.0),
+                    );
+                    painter.rect_filled(bar, CornerRadius::same(1), c);
+                }
+                // Thin highlight outline so it stands off the background.
+                painter.rect_stroke(
+                    rect,
+                    radius,
+                    Stroke::new(1.0, Color32::from_white_alpha(40)),
+                    StrokeKind::Inside,
+                );
+                painter.galley(
+                    rect.center() - galley.size() * 0.5,
+                    galley,
+                    Color32::from_white_alpha(235),
+                );
             }
         }
 
