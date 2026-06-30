@@ -75,24 +75,20 @@ No install step, no app bundle, no Gatekeeper prompts - just clone and run.
 
 ## Put it in your Dock (macOS)
 
-Prefer a real `Tessera.app` over `cargo run`? Build a bundle straight from
-source:
+Prefer a real `Tessera.app` over `cargo run`? Build a bundle from source:
 
 ```sh
-scripts/package.sh            # → dist/Tessera.app  (universal, ad-hoc signed)
+scripts/package.sh            # → dist/Tessera.app  (universal binary)
 scripts/package.sh --dmg      # also a drag-to-install .dmg
 ```
 
-Then drop it in `/Applications` and pin it to the Dock:
+Then install it and pin it to the Dock:
 
 ```sh
 cp -R dist/Tessera.app /Applications/
 ```
 
-Because you built it locally it isn't download-quarantined, so the ad-hoc
-signature is enough - it just opens, no Gatekeeper prompt. (A copy you
-*download* from elsewhere would be blocked until notarized, or until you
-right-click → **Open** once.)
+It opens straight away - you built it yourself, so there's no Gatekeeper prompt.
 
 ## tmux
 
