@@ -73,6 +73,27 @@ cargo run --release -- --help  # usage
 
 No install step, no app bundle, no Gatekeeper prompts - just clone and run.
 
+## Put it in your Dock (macOS)
+
+Prefer a real `Tessera.app` over `cargo run`? Build a bundle straight from
+source:
+
+```sh
+scripts/package.sh            # → dist/Tessera.app  (universal, ad-hoc signed)
+scripts/package.sh --dmg      # also a drag-to-install .dmg
+```
+
+Then drop it in `/Applications` and pin it to the Dock:
+
+```sh
+cp -R dist/Tessera.app /Applications/
+```
+
+Because you built it locally it isn't download-quarantined, so the ad-hoc
+signature is enough - it just opens, no Gatekeeper prompt. (A copy you
+*download* from elsewhere would be blocked until notarized, or until you
+right-click → **Open** once.)
+
 ## tmux
 
 Tessera gives you native GUI splits without tmux. To drive panes from tmux
