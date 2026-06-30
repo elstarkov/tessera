@@ -71,7 +71,7 @@ cargo run --release            # launches your $SHELL
 cargo run --release -- --help  # usage
 ```
 
-No install step, no app bundle, no Gatekeeper prompts - just clone and run.
+No install step, no Gatekeeper prompts - just clone and run.
 
 ## Put it in your Dock (macOS)
 
@@ -159,8 +159,6 @@ Tessera is [MIT-licensed](LICENSE). It vendors and lightly patches
 [Symbols Nerd Font](https://www.nerdfonts.com) (MIT), and builds on
 [`alacritty_terminal`](https://github.com/alacritty/alacritty),
 [`egui`/`eframe`](https://github.com/emilk/egui), and `portable-pty`.
-
-Built in Rust, pair-programmed with [Claude Code](https://claude.com/claude-code).
 
 ## Roadmap
 
