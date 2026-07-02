@@ -36,7 +36,11 @@ fn main() -> eframe::Result<()> {
                 .clone()
                 .or_else(|| std::env::var("SHELL").ok())
                 .unwrap_or_else(|| "/bin/zsh".to_string());
-            (shell, Vec::new())
+            // Run as a login shell so app-bundle launches (Dock/Finder), which
+            // start with a minimal environment, still source the user's
+            // profile and get a full PATH - the same behaviour as
+            // Terminal.app, iTerm2 and Alacritty.
+            (shell, vec!["-l".to_string()])
         }
     };
     let cfg = Config { shell, args };

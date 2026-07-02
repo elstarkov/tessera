@@ -162,9 +162,23 @@ impl TerminalBackend {
         pty_event_proxy_sender: Sender<(u64, PtyEvent)>,
         settings: BackendSettings,
     ) -> Result<Self> {
+        // tessera patch: guarantee the child shell a usable TERM. GUI launches
+        // (macOS Dock/Finder) provide no TERM at all, which leaves zsh/ncurses
+        // without terminfo and breaks line editing; keep a valid inherited
+        // value, otherwise fall back to the ubiquitous xterm-256color.
+        // COLORTERM advertises 24-bit colour support.
+        let mut env = std::collections::HashMap::new();
+        let term = std::env::var("TERM")
+            .ok()
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "xterm-256color".to_string());
+        env.insert("TERM".to_string(), term);
+        env.insert("COLORTERM".to_string(), "truecolor".to_string());
+
         let pty_config = tty::Options {
             shell: Some(tty::Shell::new(settings.shell, settings.args)),
             working_directory: settings.working_directory,
+            env,
             ..tty::Options::default()
         };
         let config = term::Config::default();
