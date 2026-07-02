@@ -182,16 +182,22 @@ impl<'a> TerminalView<'a> {
                         ))
                     }
                 }
-                egui::Event::MouseWheel { unit, delta, .. } if mouse_ok => {
+                egui::Event::MouseWheel {
+                    unit,
+                    delta,
+                    modifiers,
+                } if mouse_ok => {
                     // A wheel gesture over this pane lights up the auto-hiding
                     // scrollbar - even if the scroll is clamped at the top/bottom,
                     // so it behaves the same as iTerm2 (tessera).
                     state.last_scroll_time = layout.ctx.input(|i| i.time);
-                    input_actions.push(process_mouse_wheel(
+                    input_actions.extend(process_mouse_wheel(
                         state,
+                        self.backend,
                         self.font.font_type().size,
                         unit,
                         delta,
+                        &modifiers,
                     ))
                 }
                 egui::Event::PointerButton {
@@ -544,26 +550,52 @@ fn process_keyboard_key(
 
 fn process_mouse_wheel(
     state: &mut TerminalViewState,
+    backend: &TerminalBackend,
     font_size: f32,
     unit: MouseWheelUnit,
     delta: Vec2,
-) -> InputAction {
-    match unit {
-        MouseWheelUnit::Line => {
-            let lines = delta.y.signum() * delta.y.abs().ceil();
-            InputAction::BackendCall(BackendCommand::Scroll(lines as i32))
-        }
+    modifiers: &Modifiers,
+) -> Vec<InputAction> {
+    // Normalise the gesture to whole lines (mice report lines, trackpads
+    // points); positive = toward older output, Scroll's convention.
+    let lines = match unit {
+        MouseWheelUnit::Line => (delta.y.signum() * delta.y.abs().ceil()) as i32,
         MouseWheelUnit::Point => {
             state.scroll_pixels -= delta.y;
             let lines = (state.scroll_pixels / font_size).trunc();
             state.scroll_pixels %= font_size;
-            if lines != 0.0 {
-                InputAction::BackendCall(BackendCommand::Scroll(-lines as i32))
-            } else {
-                InputAction::Ignore
-            }
+            -(lines as i32)
         }
-        MouseWheelUnit::Page => InputAction::Ignore,
+        MouseWheelUnit::Page => 0,
+    };
+    if lines == 0 {
+        return vec![];
+    }
+
+    // tessera patch: when the application has mouse reporting enabled (a TUI
+    // with its own scroll handling), the wheel belongs to it - report scroll-
+    // button presses (64/65), one per line. Plain Scroll would degrade to
+    // arrow keys on the alternate screen, which such apps don't want. Shift
+    // keeps the wheel for the emulator's own scrollback, like Alacritty.
+    let terminal_mode = backend.last_content().terminal_mode;
+    if terminal_mode.intersects(TermMode::MOUSE_MODE) && !modifiers.shift {
+        let button = if lines > 0 {
+            MouseButton::ScrollUp
+        } else {
+            MouseButton::ScrollDown
+        };
+        (0..lines.unsigned_abs())
+            .map(|_| {
+                InputAction::BackendCall(BackendCommand::MouseReport(
+                    button.clone(),
+                    *modifiers,
+                    state.current_mouse_position_on_grid,
+                    true,
+                ))
+            })
+            .collect()
+    } else {
+        vec![InputAction::BackendCall(BackendCommand::Scroll(lines))]
     }
 }
 
