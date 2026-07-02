@@ -140,7 +140,15 @@ impl Tessera {
                 settings.font_family.as_deref().unwrap_or_default()
             );
         }
-        configure_fonts(&cc.egui_ctx, user_font);
+        let has_bold_face = configure_fonts(&cc.egui_ctx, user_font, settings.load_bold_font());
+        let bold_font_type = if has_bold_face {
+            FontId::new(
+                settings.font_size,
+                egui::FontFamily::Name(BOLD_FAMILY.into()),
+            )
+        } else {
+            FontId::monospace(settings.font_size)
+        };
 
         // Build the terminal theme from the chosen palette, and derive the
         // surrounding chrome (pane card, gutter, bars) from its background so a
@@ -167,6 +175,7 @@ impl Tessera {
             theme,
             font: TerminalFont::new(FontSettings {
                 font_type: FontId::monospace(settings.font_size),
+                bold_font_type,
             }),
             cfg,
             default_title,
@@ -1461,10 +1470,22 @@ fn shell_basename(shell: &str) -> String {
         .to_string()
 }
 
+/// Name of the egui font family holding the bold terminal face. Only
+/// registered when a true bold face exists (see `configure_fonts`).
+pub const BOLD_FAMILY: &str = "mono-bold";
+
 /// Register fonts: the user's `font-family` (if any) as the primary monospace
 /// face, plus a Nerd Font symbols fallback so prompt icons and powerline glyphs
-/// (which most monospace fonts lack) still render.
-fn configure_fonts(ctx: &egui::Context, user_font: Option<(Vec<u8>, u32)>) {
+/// (which most monospace fonts lack) still render. Also registers a bold
+/// monospace family for cells with the bold attribute - the user font's bold
+/// face when it ships one, or the bundled Hack Bold to match the default Hack.
+/// Returns whether that bold family was registered; when it wasn't (a user
+/// font without a true bold), the terminal synthesises bold instead.
+fn configure_fonts(
+    ctx: &egui::Context,
+    user_font: Option<(Vec<u8>, u32)>,
+    user_bold_font: Option<(Vec<u8>, u32)>,
+) -> bool {
     use egui::{FontData, FontFamily};
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
@@ -1475,6 +1496,7 @@ fn configure_fonts(ctx: &egui::Context, user_font: Option<(Vec<u8>, u32)>) {
     );
     // A configured font is loaded from disk and put *first* in the Monospace
     // family, so the terminal (which renders with FontId::monospace) uses it.
+    let has_user_font = user_font.is_some();
     if let Some((bytes, index)) = user_font {
         let mut data = FontData::from_owned(bytes);
         data.index = index; // pick the right face out of a .ttc collection
@@ -1487,6 +1509,31 @@ fn configure_fonts(ctx: &egui::Context, user_font: Option<(Vec<u8>, u32)>) {
             .or_default()
             .insert(0, "user_mono".to_owned());
     }
+    let bold_data = match (has_user_font, user_bold_font) {
+        // The configured font's own bold face.
+        (true, Some((bytes, index))) => {
+            let mut data = FontData::from_owned(bytes);
+            data.index = index;
+            Some(data)
+        }
+        // Configured font without a true bold: leave the family unregistered
+        // (mixing another typeface's bold in would look worse than synthesis).
+        (true, None) => None,
+        // Default font: bundle the matching Hack Bold.
+        (false, _) => Some(FontData::from_static(include_bytes!(
+            "../assets/fonts/Hack-Bold.ttf"
+        ))),
+    };
+    let has_bold = bold_data.is_some();
+    if let Some(data) = bold_data {
+        fonts
+            .font_data
+            .insert("mono_bold".to_owned(), std::sync::Arc::new(data));
+        fonts.families.insert(
+            FontFamily::Name(BOLD_FAMILY.into()),
+            vec!["mono_bold".to_owned(), "nerd_symbols".to_owned()],
+        );
+    }
     // Append the symbols font as a last-resort fallback in both families (the
     // primary font is tried first; missing glyphs fall through to the symbols).
     for family in [FontFamily::Monospace, FontFamily::Proportional] {
@@ -1497,6 +1544,7 @@ fn configure_fonts(ctx: &egui::Context, user_font: Option<(Vec<u8>, u32)>) {
             .push("nerd_symbols".to_owned());
     }
     ctx.set_fonts(fonts);
+    has_bold
 }
 
 /// Theme egui's popups (the gear "Settings" menu, the right-click tab menu,

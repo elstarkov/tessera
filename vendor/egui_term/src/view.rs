@@ -262,7 +262,16 @@ impl<'a> TerminalView<'a> {
             let is_app_cursor_mode = content.terminal_mode.contains(TermMode::APP_CURSOR);
             let is_wide_char = flags.contains(cell::Flags::WIDE_CHAR);
             let is_inverse = flags.contains(cell::Flags::INVERSE);
-            let is_dim = flags.intersects(cell::Flags::DIM | cell::Flags::DIM_BOLD);
+            // tessera patch: render the SGR style attributes TUIs build their
+            // visual hierarchy from. DIM_BOLD is the composite DIM|BOLD, so
+            // testing it with `intersects` would catch plain bold cells and dim
+            // them - `contains(DIM)` alone covers both DIM and DIM_BOLD.
+            let is_dim = flags.contains(cell::Flags::DIM);
+            let is_bold = flags.contains(cell::Flags::BOLD);
+            let is_italic = flags.contains(cell::Flags::ITALIC);
+            let is_underline = flags.intersects(cell::Flags::ALL_UNDERLINES);
+            let is_strikeout = flags.contains(cell::Flags::STRIKEOUT);
+            let is_hidden = flags.contains(cell::Flags::HIDDEN);
             let is_selected = content
                 .selectable_range
                 .is_some_and(|r| r.contains(indexed.point));
@@ -274,7 +283,18 @@ impl<'a> TerminalView<'a> {
             let line_num = indexed.point.line.0 + content.grid.display_offset() as i32;
             let y = layout_min.y + (cell_height * line_num as f32);
 
-            let mut fg = self.theme.get_color(indexed.fg);
+            // Bold promotes the base ANSI colours to their bright variants
+            // ("bold-as-bright"), so bold text reads as such even in colours.
+            let fg_color = if is_bold {
+                match indexed.fg {
+                    Color::Named(name) => Color::Named(name.to_bright()),
+                    Color::Indexed(idx @ 0..=7) => Color::Indexed(idx + 8),
+                    other => other,
+                }
+            } else {
+                indexed.fg
+            };
+            let mut fg = self.theme.get_color(fg_color);
             let mut bg = self.theme.get_color(indexed.bg);
             let cell_width = if is_wide_char {
                 cell_width * 2.0
@@ -314,6 +334,26 @@ impl<'a> TerminalView<'a> {
                 });
             }
 
+            // Underline / strikethrough attributes, drawn as segments (like the
+            // hyperlink underline) so they also span blank cells.
+            if is_underline && !is_hidden {
+                let underline_y = y + cell_height * 0.92;
+                shapes.push(Shape::LineSegment {
+                    points: [
+                        Pos2::new(x, underline_y),
+                        Pos2::new(x + cell_width, underline_y),
+                    ],
+                    stroke: Stroke::new((cell_height * 0.06).max(1.0), fg).into(),
+                });
+            }
+            if is_strikeout && !is_hidden {
+                let strike_y = y + cell_height * 0.5;
+                shapes.push(Shape::LineSegment {
+                    points: [Pos2::new(x, strike_y), Pos2::new(x + cell_width, strike_y)],
+                    stroke: Stroke::new((cell_height * 0.06).max(1.0), fg).into(),
+                });
+            }
+
             // Handle cursor rendering
             if content.grid.cursor.point == indexed.point {
                 let cursor_color = self.theme.get_color(content.cursor.fg);
@@ -325,22 +365,57 @@ impl<'a> TerminalView<'a> {
             }
 
             // Draw text content
-            if indexed.c != ' ' && indexed.c != '\t' {
+            if !is_hidden && indexed.c != ' ' && indexed.c != '\t' {
                 if content.grid.cursor.point == indexed.point && is_app_cursor_mode {
                     std::mem::swap(&mut fg, &mut bg);
                 }
 
-                shapes.push(Shape::text(
-                    &painter.fonts(|c| c.clone()),
-                    Pos2 {
+                let font_id = if is_bold {
+                    self.font.bold_font_type()
+                } else {
+                    self.font.font_type()
+                };
+
+                if is_italic {
+                    // No italic terminal face is registered; egui's faux
+                    // italics (glyph skew) keeps the cell metrics intact.
+                    let mut format = egui::TextFormat::simple(font_id, fg);
+                    format.italics = true;
+                    let mut job = egui::text::LayoutJob::default();
+                    job.append(&indexed.c.to_string(), 0.0, format);
+                    let galley = painter.fonts(|f| f.layout_job(job));
+                    let glyph_width = galley.size().x;
+                    shapes.push(Shape::galley(
+                        Pos2::new(x + (cell_width - glyph_width) / 2.0, y),
+                        galley,
+                        fg,
+                    ));
+                } else {
+                    let pos = Pos2 {
                         x: x + (cell_width / 2.0),
                         y,
-                    },
-                    Align2::CENTER_TOP,
-                    indexed.c,
-                    self.font.font_type(),
-                    fg,
-                ));
+                    };
+                    shapes.push(Shape::text(
+                        &painter.fonts(|c| c.clone()),
+                        pos,
+                        Align2::CENTER_TOP,
+                        indexed.c,
+                        font_id.clone(),
+                        fg,
+                    ));
+                    // No dedicated bold face available: synthesise bold by
+                    // double-striking the glyph half a pixel to the right.
+                    if is_bold && font_id == self.font.font_type() {
+                        shapes.push(Shape::text(
+                            &painter.fonts(|c| c.clone()),
+                            Pos2 { x: pos.x + 0.5, y },
+                            Align2::CENTER_TOP,
+                            indexed.c,
+                            font_id,
+                            fg,
+                        ));
+                    }
+                }
             }
         }
 

@@ -33,7 +33,8 @@ is a real terminal running a real shell (or `tmux`).
 - **Keyboard-first** - splits, pane navigation (`Cmd+Alt+Arrow`), and direct
   pane focus (`Opt+1..9`).
 - **GPU-accelerated** rendering via `eframe`/`egui`.
-- **Real terminal emulation** - full VT/ANSI, colours, scrollback, selection,
+- **Real terminal emulation** - full VT/ANSI, 24-bit colour, text styles
+  (bold, dim, italic, underline, strikethrough), scrollback, selection,
   copy/paste - powered by Alacritty's terminal core.
 - **Auto-hiding scrollbars** - a slim iTerm2-style scrollbar fades in while you
   scroll back through a pane's history and fades away again when you stop.
@@ -149,14 +150,16 @@ src/
 vendor/
   egui_term/  Vendored terminal widget (MIT), patched so keyboard input
               follows the focused pane, plus regex scrollback search,
-              auto-hiding scrollbars, and a dirty-gated render path
+              auto-hiding scrollbars, SGR text styles, wheel scrolling in
+              mouse-mode TUIs, and a dirty-gated render path
 ```
 
 ## Credits & license
 
 Tessera is [MIT-licensed](LICENSE). It vendors and lightly patches
 [`egui_term`](https://github.com/Harzu/egui_term) (MIT), bundles
-[Symbols Nerd Font](https://www.nerdfonts.com) (MIT), and builds on
+[Symbols Nerd Font](https://www.nerdfonts.com) (MIT) and the bold face of
+[Hack](https://sourcefoundry.org/hack/) (MIT/Bitstream Vera), and builds on
 [`alacritty_terminal`](https://github.com/alacritty/alacritty),
 [`egui`/`eframe`](https://github.com/emilk/egui), and `portable-pty`.
 

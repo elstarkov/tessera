@@ -76,6 +76,13 @@ comments before changing behaviour here. The notable local changes:
   whole grid on frames where nothing changed (hover, idle, a sibling's output).
 - The PTY subscription thread `break`s when `recv()` returns `Err` (every sender
   dropped = pane closed) instead of busy-looping, which would peg a core per closed pane.
+- SGR text styles in `view.rs` `show()`: bold (bright-colour promotion + a bold face,
+  or double-strike synthesis when none exists), dim, faux italics, underline,
+  strikethrough, hidden. The bold face arrives via `FontSettings::bold_font_type`;
+  Tessera registers the `mono-bold` egui family in `configure_fonts` (user font's
+  bold via fontdb, else the bundled Hack Bold).
+- Wheel scrolls become SGR scroll-button reports when the app enables mouse
+  reporting (`process_mouse_wheel`); Shift bypasses to the emulator scrollback.
 
 ## Notes
 

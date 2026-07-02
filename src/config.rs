@@ -141,16 +141,32 @@ impl Settings {
     /// set and matches an installed font. Returns `(bytes, face_index)` ready to
     /// hand to egui. `None` means "use the bundled default".
     pub fn load_font(&self) -> Option<(Vec<u8>, u32)> {
+        self.query_font(fontdb::Weight::NORMAL, false)
+    }
+
+    /// Load the bold face of the configured font, for cells with the bold
+    /// attribute. `None` when no `font-family` is set (the bundled bold is
+    /// used) or the family ships no true bold (bold is then synthesised).
+    pub fn load_bold_font(&self) -> Option<(Vec<u8>, u32)> {
+        self.query_font(fontdb::Weight::BOLD, true)
+    }
+
+    /// fontdb matching returns the *closest* face, so `require_weight` rejects
+    /// approximations (a regular face standing in for a requested bold).
+    fn query_font(&self, weight: fontdb::Weight, require_weight: bool) -> Option<(Vec<u8>, u32)> {
         let family = self.font_family.as_ref()?;
         let mut db = fontdb::Database::new();
         db.load_system_fonts();
         let query = fontdb::Query {
             families: &[fontdb::Family::Name(family)],
-            weight: fontdb::Weight::NORMAL,
+            weight,
             stretch: fontdb::Stretch::Normal,
             style: fontdb::Style::Normal,
         };
         let id = db.query(&query)?;
+        if require_weight && db.face(id)?.weight != weight {
+            return None;
+        }
         db.with_face_data(id, |data, index| (data.to_vec(), index))
     }
 }
