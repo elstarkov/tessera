@@ -79,6 +79,10 @@ comments before changing behaviour here. The notable local changes:
 
 ## Notes
 
+- The repo is public-facing. Write comments and docs for a general developer
+  audience: document present-tense behaviour and constraints, never project
+  history ("the old code", "used to"), session narration, or maintainer-directed
+  asides.
 - macOS-first (Cmd-key shortcuts, `package.sh`), though nothing is hard-bound to it.
 - No live config reload, no inline images (Sixel/kitty), no ligatures/CJK/emoji fonts
   beyond the bundled Symbols Nerd Font fallback. Treat as a v0.1 hobby project.
