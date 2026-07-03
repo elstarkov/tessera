@@ -225,8 +225,8 @@ fn drag_survives_app_redraws() {
     let ctx = egui::Context::default();
     // Alt screen + click-only reporting + a busy app erasing-and-rewriting the
     // selected row (`\e[2K` + rewrite, how Ink-style TUIs repaint). An erase
-    // intersecting the selection makes the terminal drop it, which used to
-    // dead-end the rest of the drag.
+    // intersecting the selection makes the terminal drop it - without the
+    // backend's selection anchor the rest of the drag would be a no-op.
     let mut backend = spawn_backend(
         &ctx,
         "printf '\\033[?1049h\\033[?1006h\\033[?1000h'; \

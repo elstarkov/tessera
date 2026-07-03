@@ -36,6 +36,10 @@ is a real terminal running a real shell (or `tmux`).
 - **Real terminal emulation** - full VT/ANSI, 24-bit colour, text styles
   (bold, dim, italic, underline, strikethrough), scrollback, selection,
   copy/paste - powered by Alacritty's terminal core.
+- **Plays nice with TUIs** - mouse reporting with iTerm2-style selection on
+  top (drag to select even while an app owns the mouse, copy-on-select),
+  bracketed paste, and image paste via `Ctrl+V` - vim, htop, and Claude Code
+  behave like they do in iTerm2.
 - **Auto-hiding scrollbars** - a slim iTerm2-style scrollbar fades in while you
   scroll back through a pane's history and fades away again when you stop.
 - **Nerd Font ready** - bundles a Nerd Font symbols fallback, so prompt icons
@@ -52,7 +56,7 @@ is a real terminal running a real shell (or `tmux`).
 | `Cmd+Shift+D` | Split down (panes stacked) |
 | `Cmd+W` | Close the focused pane |
 | hover a tab / pane | An `×` appears - click it to close that tab / pane |
-| `Cmd+K` | Clear the terminal — scrollback + screen (prompt to the top) |
+| `Cmd+K` | Clear the terminal - scrollback + screen (prompt to the top) |
 | `Cmd+F` | Search the scrollback (Enter / Shift+Enter to step) |
 | `Cmd+Alt+←/→/↑/↓` | Move focus between panes |
 | `Cmd+V` | Paste text (bracketed-paste aware) |
@@ -140,8 +144,10 @@ are reported on stderr and skipped - a broken config still gives you a terminal.
   [Configuration](#configuration)), but tab/pane switching (Cmd/Opt+1-9) and
   pane navigation (Cmd+Alt+arrows) aren't.
 - **No inline images** (Sixel / kitty / iTerm protocols).
-- **Not security-audited.** `cargo audit` is clean, but treat it as a v0.1
-  hobby project, not hardened software.
+- **No session persistence** - panes die with the window; there's no
+  detach/reattach. Run `tmux` inside a pane if you need that.
+- **Not security-audited.** Treat it as a v0.1 hobby project, not hardened
+  software.
 
 ## Architecture
 
@@ -156,8 +162,9 @@ src/
 vendor/
   egui_term/  Vendored terminal widget (MIT), patched so keyboard input
               follows the focused pane, plus regex scrollback search,
-              auto-hiding scrollbars, SGR text styles, wheel scrolling in
-              mouse-mode TUIs, and a dirty-gated render path
+              auto-hiding scrollbars, SGR text styles, iTerm2-style mouse
+              selection under mouse reporting, bracketed paste, and a
+              dirty-gated render path
 ```
 
 ## Credits & license
@@ -166,8 +173,8 @@ Tessera is [MIT-licensed](LICENSE). It vendors and lightly patches
 [`egui_term`](https://github.com/Harzu/egui_term) (MIT), bundles
 [Symbols Nerd Font](https://www.nerdfonts.com) (MIT) and the bold face of
 [Hack](https://sourcefoundry.org/hack/) (MIT/Bitstream Vera), and builds on
-[`alacritty_terminal`](https://github.com/alacritty/alacritty),
-[`egui`/`eframe`](https://github.com/emilk/egui), and `portable-pty`.
+[`alacritty_terminal`](https://github.com/alacritty/alacritty) and
+[`egui`/`eframe`](https://github.com/emilk/egui).
 
 ## Roadmap
 

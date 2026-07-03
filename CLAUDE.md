@@ -21,7 +21,9 @@ scripts/package.sh [--dmg]       # build dist/Tessera.app (macOS bundle, ad-hoc 
 ```
 
 Tests live in `src/layout.rs` (split-tree behaviour), the tail of `src/app.rs`
-(`reorder_index`), and the vendor crate. The `vendor/egui_term/examples/*` files
+(pure helpers like `reorder_index`), and the vendor crate — including the headless
+mouse/paste gesture suite in `vendor/egui_term/tests/drag_select.rs`. The
+`vendor/egui_term/examples/*` files
 (`churn_stress`, `close_pane_leak`, `sync_bench`) are stress/leak harnesses — run with
 `cargo run -p egui_term --example churn_stress`.
 
@@ -36,9 +38,9 @@ locally-patched `vendor/egui_term` library crate.
 **`src/main.rs`** — CLI parsing, config load, eframe window bootstrap. Shell
 precedence: explicit CLI command > config `shell` key > `$SHELL` > `/bin/zsh`.
 
-**`src/app.rs`** — `Tessera` is the `eframe::App`; `update()` (≈line 872) is the whole
-per-frame loop: drain PTY events → handle shortcuts → draw tab strip → render the
-active tab's panes/dividers → draw rename/search/settings popups. Key ownership model:
+**`src/app.rs`** — `Tessera` is the `eframe::App`; `update()` is the whole per-frame
+loop: drain PTY events → handle shortcuts → draw tab strip → render the active
+tab's panes/dividers → draw rename/search/settings popups. Key ownership model:
 
 - Panes are **global**, keyed by a globally-unique `PaneId` (`panes: HashMap<PaneId,
   Pane>`), and outlive the tab structure. Each `Tab` holds a `Tree` (its split layout)
@@ -70,7 +72,8 @@ tab/pane switches (Cmd/Opt+1-9) and arrow navigation (Cmd+Alt+arrows) are fixed.
 upstream Harzu/egui_term (MIT) and patched for Tessera. Search for the `tessera patch`
 comments before changing behaviour here. The notable local changes:
 
-- Keyboard input follows the *focused* pane regardless of egui focus (`view.rs:146`).
+- Keyboard input follows the *focused* pane regardless of egui focus
+  (`view.rs` `process_input`).
 - Regex scrollback search (`backend/mod.rs` `search`/`clear_search`).
 - A `dirty` `AtomicBool` shared with the PTY thread so `sync()` skips re-cloning the
   whole grid on frames where nothing changed (hover, idle, a sibling's output).
