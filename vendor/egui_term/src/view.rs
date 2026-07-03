@@ -169,6 +169,11 @@ impl<'a> TerminalView<'a> {
         // in another split would drive a selection in the focused one.
         let has_focus = layout.has_focus();
         let hovered = layout.contains_pointer();
+        // tessera patch: show the text I-beam over terminal content, like
+        // other terminals, whenever the pane accepts pointer input.
+        if hovered && self.pointer_input {
+            layout.ctx.set_cursor_icon(egui::CursorIcon::Text);
+        }
         if !has_focus && !hovered {
             return self;
         }
