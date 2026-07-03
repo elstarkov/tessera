@@ -388,6 +388,30 @@ impl Tessera {
         }
     }
 
+    /// Close a whole tab: every pane in its tree (dropping a backend kills its
+    /// shell), then the tab itself - and the window when it was the last tab.
+    fn close_tab(&mut self, ti: usize, ctx: &egui::Context) {
+        if ti >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(ti);
+        for pane in tab.tree.panes_in_order() {
+            if self.search.as_ref().is_some_and(|s| s.pane == pane) {
+                self.search = None;
+            }
+            self.panes.remove(&pane);
+        }
+        if self.tabs.is_empty() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        if self.active >= self.tabs.len() {
+            self.active = self.tabs.len() - 1;
+        } else if self.active > ti {
+            self.active -= 1;
+        }
+    }
+
     /// Pull terminal output / control events off the PTY channel.
     fn drain_pty_events(&mut self, ctx: &egui::Context) {
         let mut to_close = Vec::new();
@@ -529,6 +553,7 @@ impl Tessera {
         let mut open_settings = false;
         let mut set_color: Option<(usize, Option<Color32>)> = None;
         let mut start_edit: Option<(usize, String)> = None;
+        let mut close_tab_click: Option<usize> = None;
         let mut pending_reorder: Option<(usize, usize)> = None;
         // A pane torn out of its tab and dropped on the strip → (pane, slot).
         let mut pending_tear: Option<(PaneId, usize)> = None;
@@ -597,9 +622,12 @@ impl Tessera {
                                 StrokeKind::Inside,
                             );
                         } else {
+                            // Raw rect hit-test, not resp.hovered(): the close
+                            // button sits on top and would un-hover the tab.
+                            let tab_hovered = ui.rect_contains_pointer(rect);
                             let fill = if selected {
                                 TAB_SEL
-                            } else if resp.hovered() {
+                            } else if tab_hovered {
                                 TAB_HOVER
                             } else {
                                 TAB_IDLE
@@ -625,6 +653,42 @@ impl Tessera {
                                 galley,
                                 text_color,
                             );
+
+                            // iTerm2-style hover close: an × on the tab's left
+                            // edge while the pointer is over the tab. Registered
+                            // after the tab response, so it wins the click.
+                            if tab_hovered
+                                && dragged_src.is_none()
+                                && grip_pane.is_none()
+                                && self.editing.is_none()
+                            {
+                                let close_rect = Rect::from_center_size(
+                                    pos2(rect.left() + 15.0, rect.center().y),
+                                    egui::vec2(16.0, 16.0),
+                                );
+                                let cr =
+                                    ui.interact(close_rect, resp.id.with("close"), Sense::click());
+                                let fg = if cr.hovered() {
+                                    ui.painter().rect_filled(
+                                        close_rect,
+                                        CornerRadius::same(4),
+                                        Color32::from_white_alpha(32),
+                                    );
+                                    Color32::WHITE
+                                } else {
+                                    Color32::from_gray(150)
+                                };
+                                let x = ui.painter().layout_no_wrap(
+                                    "×".to_string(),
+                                    FontId::monospace(13.0),
+                                    fg,
+                                );
+                                ui.painter()
+                                    .galley(close_rect.center() - x.size() * 0.5, x, fg);
+                                if cr.clicked() {
+                                    close_tab_click = Some(i);
+                                }
+                            }
                         }
 
                         if resp.double_clicked() {
@@ -781,7 +845,10 @@ impl Tessera {
         }
         // Reorder/tear win over spring-load's transient active change; their
         // indices are still valid because colour above ran before the list changed.
-        if let Some((pane, insert)) = pending_tear {
+        // A close can't coincide with a drag release or another click.
+        if let Some(ti) = close_tab_click {
+            self.close_tab(ti, ctx);
+        } else if let Some((pane, insert)) = pending_tear {
             self.tear_pane_to_tab(pane, insert);
         } else if let Some((src, to)) = pending_reorder {
             self.reorder_tab(src, to);
@@ -1100,6 +1167,7 @@ impl eframe::App for Tessera {
             .inner_margin(Margin::same(GUTTER));
 
         let mut clicked: Option<PaneId> = None;
+        let mut close_pane_click: Option<PaneId> = None;
         let mut ratio_updates: Vec<(usize, f32)> = Vec::new();
         let mut pending_drop: Option<(usize, PaneId, Axis, bool)> = None;
         // A pane dragged onto another pane in this tab → (src, target, axis, after).
@@ -1135,11 +1203,18 @@ impl eframe::App for Tessera {
                     pos2(rect.center().x, rect.top() + 8.0),
                     egui::vec2(40.0, 14.0),
                 );
+                // Hover-close hit area in the pane's top-right corner (iTerm2-
+                // style: hidden until the pane is hovered).
+                let close_rect = Rect::from_center_size(
+                    pos2(rect.right() - 15.0, rect.top() + 13.0),
+                    egui::vec2(18.0, 18.0),
+                );
                 let ptr = ui.ctx().pointer_latest_pos();
                 let pane_hovered = ptr.is_some_and(|p| rect.contains(p));
                 let dragging_this = pane_drag_src == Some(*pane_id);
                 let over_grip = multi && ptr.is_some_and(|p| grip_rect.contains(p));
-                let suppress_mouse = over_grip || dragging_this;
+                let over_close = ptr.is_some_and(|p| close_rect.contains(p));
+                let suppress_mouse = over_grip || over_close || dragging_this;
 
                 let Some(pane) = self.panes.get_mut(pane_id) else {
                     continue;
@@ -1204,6 +1279,48 @@ impl eframe::App for Tessera {
                         CornerRadius::same(2),
                         Color32::from_white_alpha((vis * 160.0) as u8),
                     );
+                }
+
+                // Hover ×: closes this pane, same as Cmd+W on it. Fades in with
+                // the pane hover like the grip; hidden during any drag.
+                let tab_dragging = egui::DragAndDrop::has_payload_of_type::<TabDrag>(ui.ctx());
+                let want_close = pane_hovered
+                    && pane_drag_src.is_none()
+                    && !tab_dragging
+                    && self.editing.is_none();
+                let close_vis = ui.ctx().animate_bool_with_time(
+                    Id::new(("tessera_close_vis", active, pane_id)),
+                    want_close,
+                    0.12,
+                );
+                if want_close {
+                    let c = ui.interact(
+                        close_rect,
+                        Id::new(("tessera_pane_close", active, pane_id)),
+                        Sense::click(),
+                    );
+                    if c.clicked() {
+                        close_pane_click = Some(*pane_id);
+                    }
+                    if c.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::Default);
+                    }
+                }
+                if close_vis > 0.003 {
+                    if over_close && pane_drag_src.is_none() {
+                        ui.painter().rect_filled(
+                            close_rect,
+                            CornerRadius::same(5),
+                            Color32::from_white_alpha(28),
+                        );
+                    }
+                    let alpha = (close_vis * if over_close { 230.0 } else { 150.0 }) as u8;
+                    let fg = Color32::from_white_alpha(alpha);
+                    let x =
+                        ui.painter()
+                            .layout_no_wrap("×".to_string(), FontId::monospace(14.0), fg);
+                    ui.painter()
+                        .galley(close_rect.center() - x.size() * 0.5, x, fg);
                 }
             }
 
@@ -1331,6 +1448,15 @@ impl eframe::App for Tessera {
         }
         if let Some((src, tgt, axis, after)) = pending_pane_drop {
             self.move_pane(src, tgt, axis, after);
+        }
+        // A pane's hover × closes it; a click can't coincide with the drag/drop
+        // actions above. Closing the last pane queues the window close - bail
+        // out of the frame then, like the Cmd+W path does.
+        if let Some(p) = close_pane_click {
+            self.close_pane(p, ctx);
+            if self.tabs.is_empty() {
+                return;
+            }
         }
 
         // Floating, translucent copy of the dragged tab that follows the cursor -

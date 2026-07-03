@@ -51,6 +51,7 @@ is a real terminal running a real shell (or `tmux`).
 | `Cmd+D` | Split right (panes side-by-side) |
 | `Cmd+Shift+D` | Split down (panes stacked) |
 | `Cmd+W` | Close the focused pane |
+| hover a tab / pane | An `×` appears - click it to close that tab / pane |
 | `Cmd+K` | Clear the terminal — scrollback + screen (prompt to the top) |
 | `Cmd+F` | Search the scrollback (Enter / Shift+Enter to step) |
 | `Cmd+Alt+←/→/↑/↓` | Move focus between panes |
