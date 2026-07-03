@@ -54,6 +54,8 @@ is a real terminal running a real shell (or `tmux`).
 | `Cmd+K` | Clear the terminal — scrollback + screen (prompt to the top) |
 | `Cmd+F` | Search the scrollback (Enter / Shift+Enter to step) |
 | `Cmd+Alt+←/→/↑/↓` | Move focus between panes |
+| drag over text | Select it (double-click: word, triple-click: line); the selection is copied automatically |
+| `Shift`/`Opt` + drag | Force Tessera's own selection when an app handles the mouse itself |
 | drag a border | Resize the two adjacent panes |
 | drag a pane's top grip | Re-tile it next to another pane, or drop on the tab bar for a new tab |
 | double-click a tab | Rename it |

@@ -27,12 +27,25 @@ const EGUI_TERM_WIDGET_ID_PREFIX: &str = "egui_term::instance::";
 enum InputAction {
     BackendCall(BackendCommand),
     WriteToClipboard(String),
+    /// Copy the current selection to the clipboard, reading it *after* the
+    /// preceding backend calls apply (so a just-issued SelectStart counts).
+    CopySelection,
     Ignore,
 }
+
+/// How far (in points) a mouse-reported press must travel before the gesture
+/// stops being the app's click and becomes a local selection drag.
+const DRAG_SELECT_THRESHOLD: f32 = 3.0;
 
 #[derive(Clone, Default)]
 pub struct TerminalViewState {
     is_dragged: bool,
+    /// Where a mouse-reported press landed, kept while it may still turn into
+    /// a local selection drag (apps that only track clicks, iTerm2-style).
+    pending_select_origin: Option<Pos2>,
+    /// Whether the app was sent the press of the gesture in progress, so the
+    /// matching release is delivered even if a bypass modifier changes.
+    press_was_reported: bool,
     scroll_pixels: f32,
     current_mouse_position_on_grid: TerminalGridPoint,
     /// `ctx.input().time` of the most recent scroll gesture, used to fade the
@@ -206,7 +219,7 @@ impl<'a> TerminalView<'a> {
                     modifiers,
                     pos,
                     ..
-                } if mouse_ok => input_actions.push(process_button_click(
+                } if mouse_ok => input_actions.extend(process_button_click(
                     state,
                     layout,
                     self.backend,
@@ -229,6 +242,16 @@ impl<'a> TerminalView<'a> {
                     }
                     InputAction::WriteToClipboard(data) => {
                         layout.ctx.copy_text(data);
+                    }
+                    InputAction::CopySelection => {
+                        // sync() refreshes the selection range on every call
+                        // (only the grid clone is dirty-gated), so the freshly
+                        // finished selection is current.
+                        self.backend.sync();
+                        let content = self.backend.selectable_content();
+                        if !content.is_empty() {
+                            layout.ctx.copy_text(content);
+                        }
                     }
                     InputAction::Ignore => {}
                 }
@@ -683,7 +706,7 @@ fn process_button_click(
     position: Pos2,
     modifiers: &Modifiers,
     pressed: bool,
-) -> InputAction {
+) -> Vec<InputAction> {
     match button {
         PointerButton::Primary => process_left_button(
             state,
@@ -694,7 +717,7 @@ fn process_button_click(
             modifiers,
             pressed,
         ),
-        _ => InputAction::Ignore,
+        _ => vec![],
     }
 }
 
@@ -706,58 +729,83 @@ fn process_left_button(
     position: Pos2,
     modifiers: &Modifiers,
     pressed: bool,
-) -> InputAction {
+) -> Vec<InputAction> {
     let terminal_mode = backend.last_content().terminal_mode;
-    if terminal_mode.intersects(TermMode::MOUSE_MODE) {
+    // tessera patch: mirror iTerm2's selection rules for apps with mouse
+    // reporting enabled. Shift- or Option-clicks always bypass reporting for
+    // a local selection. Beyond that, when the app only subscribed to clicks
+    // (no drag/motion tracking), a plain drag still selects locally - the
+    // click is the app's, the drag is ours (see process_mouse_move) - and
+    // double/triple clicks still select word/line.
+    let bypass = modifiers.shift || modifiers.alt;
+    let reporting = terminal_mode.intersects(TermMode::MOUSE_MODE) && !bypass;
+    let app_tracks_drag = terminal_mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION);
+    let grid_point = state.current_mouse_position_on_grid;
+    let mods = *modifiers;
+    let report = move |pressed| {
         InputAction::BackendCall(BackendCommand::MouseReport(
             MouseButton::LeftButton,
-            *modifiers,
-            state.current_mouse_position_on_grid,
+            mods,
+            grid_point,
             pressed,
         ))
-    } else if pressed {
-        process_left_button_pressed(state, layout, position)
-    } else {
-        process_left_button_released(state, layout, backend, bindings_layout, position, modifiers)
-    }
-}
+    };
 
-fn process_left_button_pressed(
-    state: &mut TerminalViewState,
-    layout: &Response,
-    position: Pos2,
-) -> InputAction {
-    state.is_dragged = true;
-    InputAction::BackendCall(build_start_select_command(layout, position))
-}
-
-fn process_left_button_released(
-    state: &mut TerminalViewState,
-    layout: &Response,
-    backend: &TerminalBackend,
-    bindings_layout: &BindingsLayout,
-    position: Pos2,
-    modifiers: &Modifiers,
-) -> InputAction {
-    state.is_dragged = false;
-    if layout.double_clicked() || layout.triple_clicked() {
-        InputAction::BackendCall(build_start_select_command(layout, position))
-    } else {
-        let terminal_content = backend.last_content();
-        let binding_action = bindings_layout.get_action(
-            InputKind::Mouse(PointerButton::Primary),
-            *modifiers,
-            terminal_content.terminal_mode,
-        );
-
-        if binding_action == BindingAction::LinkOpen {
-            InputAction::BackendCall(BackendCommand::ProcessLink(
-                LinkAction::Open,
-                state.current_mouse_position_on_grid,
-            ))
+    if pressed {
+        state.press_was_reported = reporting;
+        if reporting {
+            // The click belongs to the app; remember where it landed so a
+            // drag can still become a local selection for clicks-only apps.
+            state.pending_select_origin = (!app_tracks_drag).then_some(position);
+            vec![report(true)]
         } else {
-            InputAction::Ignore
+            state.pending_select_origin = None;
+            state.is_dragged = true;
+            vec![InputAction::BackendCall(build_start_select_command(
+                layout, position,
+            ))]
         }
+    } else {
+        let was_selecting = state.is_dragged;
+        let press_was_reported = state.press_was_reported;
+        state.is_dragged = false;
+        state.pending_select_origin = None;
+        state.press_was_reported = false;
+
+        let mut actions = vec![];
+        // Keep press/release paired for the app, even if a bypass modifier
+        // changed mid-gesture.
+        if press_was_reported {
+            actions.push(report(false));
+        }
+
+        let multi_click = layout.double_clicked() || layout.triple_clicked();
+        if multi_click && (!reporting || !app_tracks_drag) {
+            actions.push(InputAction::BackendCall(build_start_select_command(
+                layout, position,
+            )));
+            // Copy-on-select (iTerm2 default); empty selections are skipped.
+            actions.push(InputAction::CopySelection);
+        } else {
+            if was_selecting {
+                actions.push(InputAction::CopySelection);
+            }
+            let binding_action = bindings_layout.get_action(
+                InputKind::Mouse(PointerButton::Primary),
+                *modifiers,
+                terminal_mode,
+            );
+            if binding_action == BindingAction::LinkOpen {
+                actions.push(InputAction::BackendCall(BackendCommand::ProcessLink(
+                    LinkAction::Open,
+                    grid_point,
+                )));
+            }
+        }
+        // The gesture is over: stop shielding the selection from application
+        // output (must come after CopySelection so the copy reads it intact).
+        actions.push(InputAction::BackendCall(BackendCommand::SelectEnd));
+        actions
     }
 }
 
@@ -787,6 +835,7 @@ fn process_mouse_move(
     let terminal_content = backend.last_content();
     let cursor_x = position.x - layout.rect.min.x;
     let cursor_y = position.y - layout.rect.min.y;
+    let prev_grid_position = state.current_mouse_position_on_grid;
     state.current_mouse_position_on_grid = TerminalBackend::selection_point(
         cursor_x,
         cursor_y,
@@ -795,21 +844,57 @@ fn process_mouse_move(
     );
 
     let mut actions = vec![];
-    // Handle command or selection update based on terminal mode and modifiers
+    // `is_dragged` is only ever set by a locally-handled press (mouse-mode
+    // presses become reports instead), so a drag in progress is always a
+    // selection - even if the bypass modifier was released mid-gesture.
     if state.is_dragged {
+        actions.push(InputAction::BackendCall(BackendCommand::SelectUpdate(
+            cursor_x, cursor_y,
+        )));
+    } else if let Some(origin) = state.pending_select_origin {
+        // A reported press (clicks-only mouse app) becomes a local selection
+        // once the pointer actually travels, iTerm2-style.
+        if (position - origin).length() >= DRAG_SELECT_THRESHOLD {
+            state.is_dragged = true;
+            state.pending_select_origin = None;
+            actions.push(InputAction::BackendCall(BackendCommand::SelectStart(
+                SelectionType::Simple,
+                origin.x - layout.rect.min.x,
+                origin.y - layout.rect.min.y,
+            )));
+            actions.push(InputAction::BackendCall(BackendCommand::SelectUpdate(
+                cursor_x, cursor_y,
+            )));
+        }
+    } else {
+        // tessera patch: forward motion to applications that track it, one
+        // report per grid cell like other terminals. Button-held motion is
+        // reported under 1002/1003 (only for a press the app was given);
+        // buttonless motion under 1003 only. TUIs like Claude Code rely on
+        // these to run their own drag selection.
+        let bypass = modifiers.shift || modifiers.alt;
         let terminal_mode = terminal_content.terminal_mode;
-        let cmd = if terminal_mode.contains(TermMode::MOUSE_MOTION) && modifiers.is_none() {
-            InputAction::BackendCall(BackendCommand::MouseReport(
-                MouseButton::LeftMove,
-                *modifiers,
-                state.current_mouse_position_on_grid,
-                true,
-            ))
-        } else {
-            InputAction::BackendCall(BackendCommand::SelectUpdate(cursor_x, cursor_y))
-        };
-
-        actions.push(cmd);
+        if !bypass && prev_grid_position != state.current_mouse_position_on_grid {
+            let primary_down = layout.ctx.input(|i| i.pointer.primary_down());
+            if primary_down
+                && state.press_was_reported
+                && terminal_mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
+            {
+                actions.push(InputAction::BackendCall(BackendCommand::MouseReport(
+                    MouseButton::LeftMove,
+                    *modifiers,
+                    state.current_mouse_position_on_grid,
+                    true,
+                )));
+            } else if !primary_down && terminal_mode.contains(TermMode::MOUSE_MOTION) {
+                actions.push(InputAction::BackendCall(BackendCommand::MouseReport(
+                    MouseButton::NoneMove,
+                    *modifiers,
+                    state.current_mouse_position_on_grid,
+                    true,
+                )));
+            }
+        }
     }
 
     // Handle link hover if applicable

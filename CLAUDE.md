@@ -83,6 +83,15 @@ comments before changing behaviour here. The notable local changes:
   bold via fontdb, else the bundled Hack Bold).
 - Wheel scrolls become SGR scroll-button reports when the app enables mouse
   reporting (`process_mouse_wheel`); Shift bypasses to the emulator scrollback.
+- iTerm2-style mouse handling under app mouse reporting (`process_left_button` /
+  `process_mouse_move`): presses/releases and per-cell motion are forwarded
+  (button-held motion under 1002/1003, hover motion under 1003), so TUIs that
+  run their own drag selection get the whole gesture - Claude Code uses 1003.
+  Clicks-only apps (1000) instead get a local drag / double / triple-click
+  selection; Shift/Option always forces a local selection. Finishing a local
+  selection copies it (copy-on-select), and a live local selection is rebuilt
+  when app output clears it (`selection_anchor` in the backend). Headless
+  gesture tests: `vendor/egui_term/tests/drag_select.rs`.
 
 ## Notes
 

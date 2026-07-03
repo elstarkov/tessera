@@ -35,6 +35,9 @@ pub enum BackendCommand {
     Resize(Size, Size),
     SelectStart(SelectionType, f32, f32),
     SelectUpdate(f32, f32),
+    /// The selection gesture finished (mouse released); the selection itself
+    /// stays, but it is no longer rebuilt if application output clears it.
+    SelectEnd,
     ProcessLink(LinkAction, Point),
     MouseReport(MouseButton, Modifiers, Point, bool),
 }
@@ -151,6 +154,12 @@ pub struct TerminalBackend {
     /// True between a Cmd+K clear (which sends Ctrl+L) and the shell's redraw
     /// landing, so we can then drop the scrollback that redraw scrolled off.
     clear_pending: bool,
+    /// Anchor and latest point of the selection gesture in progress. Any PTY
+    /// output touching the selected rows makes the terminal drop its
+    /// selection; while the gesture is live these rebuild it (see sync and
+    /// update_selection), so busy TUIs can't dead-end a drag.
+    selection_anchor: Option<(SelectionType, Point, Side)>,
+    selection_cursor: Option<(Point, Side)>,
 }
 
 impl TerminalBackend {
@@ -247,6 +256,8 @@ impl TerminalBackend {
             search_matches: Vec::new(),
             search_index: 0,
             clear_pending: false,
+            selection_anchor: None,
+            selection_cursor: None,
         })
     }
 
@@ -276,6 +287,10 @@ impl TerminalBackend {
             BackendCommand::SelectUpdate(x, y) => {
                 self.update_selection(&mut term, x, y);
                 self.dirty.store(true, Ordering::Relaxed);
+            }
+            BackendCommand::SelectEnd => {
+                self.selection_anchor = None;
+                self.selection_cursor = None;
             }
             // Link hover/clear only touch the overlay (recomputed each sync) and
             // mouse reports are echoed back by the app as PTY output (a Wakeup),
@@ -320,6 +335,18 @@ impl TerminalBackend {
     pub fn sync(&mut self) -> &RenderableContent {
         let term = self.term.clone();
         let mut terminal = term.lock();
+        // While a selection gesture is live, rebuild a selection that
+        // application output cleared, so the highlight doesn't flicker away
+        // under busy TUIs even between mouse moves.
+        if terminal.selection.is_none() {
+            if let (Some((selection_type, anchor, anchor_side)), Some((cursor, cursor_side))) =
+                (self.selection_anchor, self.selection_cursor)
+            {
+                let mut selection = Selection::new(selection_type, anchor, anchor_side);
+                selection.update(cursor, cursor_side);
+                terminal.selection = Some(selection);
+            }
+        }
         let selectable_range = match &terminal.selection {
             Some(s) => s.to_range(&terminal),
             None => None,
@@ -567,18 +594,26 @@ impl TerminalBackend {
         y: f32,
     ) {
         let location = Self::selection_point(x, y, &self.size, terminal.grid().display_offset());
-        terminal.selection = Some(Selection::new(
-            selection_type,
-            location,
-            self.selection_side(x),
-        ));
+        let side = self.selection_side(x);
+        self.selection_anchor = Some((selection_type, location, side));
+        self.selection_cursor = Some((location, side));
+        terminal.selection = Some(Selection::new(selection_type, location, side));
     }
 
     fn update_selection(&mut self, terminal: &mut Term<EventProxy>, x: f32, y: f32) {
         let display_offset = terminal.grid().display_offset();
+        let location = Self::selection_point(x, y, &self.size, display_offset);
+        let side = self.selection_side(x);
+        self.selection_cursor = Some((location, side));
+        // Rebuild from the anchor if application output cleared the selection
+        // mid-drag - otherwise the rest of the gesture would be a no-op.
+        if terminal.selection.is_none() {
+            if let Some((selection_type, anchor, anchor_side)) = self.selection_anchor {
+                terminal.selection = Some(Selection::new(selection_type, anchor, anchor_side));
+            }
+        }
         if let Some(ref mut selection) = terminal.selection {
-            let location = Self::selection_point(x, y, &self.size, display_offset);
-            selection.update(location, self.selection_side(x));
+            selection.update(location, side);
         }
     }
 
