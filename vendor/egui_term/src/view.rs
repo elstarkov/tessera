@@ -312,11 +312,19 @@ impl<'a> TerminalView<'a> {
             let y = layout_min.y + (cell_height * line_num as f32);
 
             // Bold promotes the base ANSI colours to their bright variants
-            // ("bold-as-bright"), so bold text reads as such even in colours.
-            let fg_color = if is_bold {
+            // ("bold-as-bright"); dim maps named colours onto the theme's dim
+            // palette (~60% brightness), so dimmed text - TUI hints, ghost
+            // suggestions - reads as clearly fainter than typed text. Both
+            // flags together keep the base colour.
+            let fg_color = if is_bold && !is_dim {
                 match indexed.fg {
                     Color::Named(name) => Color::Named(name.to_bright()),
                     Color::Indexed(idx @ 0..=7) => Color::Indexed(idx + 8),
+                    other => other,
+                }
+            } else if is_dim && !is_bold {
+                match indexed.fg {
+                    Color::Named(name) => Color::Named(name.to_dim()),
                     other => other,
                 }
             } else {
@@ -330,8 +338,15 @@ impl<'a> TerminalView<'a> {
                 cell_width
             };
 
-            if is_dim {
-                fg = fg.linear_multiply(0.7);
+            // Colours the dim palette can't express (RGB / 256-indexed) are
+            // dimmed numerically in gamma space, matching Alacritty's
+            // DIM_FACTOR; a linear-space multiply reads as barely darker.
+            if is_dim && !matches!(indexed.fg, Color::Named(_)) {
+                fg = egui::Color32::from_rgb(
+                    (fg.r() as f32 * 0.66) as u8,
+                    (fg.g() as f32 * 0.66) as u8,
+                    (fg.b() as f32 * 0.66) as u8,
+                );
             }
 
             if is_inverse || is_selected {
