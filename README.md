@@ -55,6 +55,9 @@ is a real terminal running a real shell (or `tmux`).
 | `Cmd+K` | Clear the terminal — scrollback + screen (prompt to the top) |
 | `Cmd+F` | Search the scrollback (Enter / Shift+Enter to step) |
 | `Cmd+Alt+←/→/↑/↓` | Move focus between panes |
+| `Cmd+V` | Paste text (bracketed-paste aware) |
+| `Ctrl+V` | Forwarded to the app - how TUIs like Claude Code take image pastes |
+| drop a file on a pane | Paste its shell-quoted path (e.g. attach an image to a TUI prompt) |
 | drag over text | Select it (double-click: word, triple-click: line); the selection is copied automatically |
 | `Shift`/`Opt` + drag | Force Tessera's own selection when an app handles the mouse itself |
 | drag a border | Resize the two adjacent panes |

@@ -13,7 +13,7 @@ use egui::{
 };
 use egui_term::{
     BackendCommand, BackendSettings, FontSettings, PtyEvent, TerminalBackend, TerminalFont,
-    TerminalTheme, TerminalView,
+    TerminalMode, TerminalTheme, TerminalView,
 };
 
 use crate::config::{KeySpec, Keybinds, Settings};
@@ -386,6 +386,44 @@ impl Tessera {
                 .unwrap_or(fallback);
             self.tabs[ti].focused = nf;
         }
+    }
+
+    /// Files dropped onto the window (e.g. a screenshot dragged from the
+    /// desktop or Finder) paste their shell-quoted paths into the focused
+    /// pane, like iTerm2 - TUIs such as Claude Code attach images from a
+    /// pasted path. Wrapped in bracketed-paste markers when the app asks for
+    /// them (mode 2004).
+    fn paste_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        if dropped.is_empty() {
+            return;
+        }
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let Some(pane) = self.panes.get_mut(&tab.focused) else {
+            return;
+        };
+        let text = dropped
+            .iter()
+            .filter_map(|f| f.path.as_ref().and_then(|p| p.to_str()))
+            .map(shell_quote)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if text.is_empty() {
+            return;
+        }
+        let bracketed = pane
+            .backend
+            .last_content()
+            .terminal_mode
+            .contains(TerminalMode::BRACKETED_PASTE);
+        let bytes = if bracketed {
+            format!("\x1b[200~{text}\x1b[201~").into_bytes()
+        } else {
+            text.into_bytes()
+        };
+        pane.backend.process_command(BackendCommand::Write(bytes));
     }
 
     /// Close a whole tab: every pane in its tree (dropping a backend kills its
@@ -1107,6 +1145,7 @@ impl eframe::App for Tessera {
         if self.tabs.is_empty() {
             return;
         }
+        self.paste_dropped_files(ctx);
         self.draw_tab_strip(ctx);
 
         // The active tab's colour (if set) tints the accent UI; else default blue.
@@ -1915,6 +1954,12 @@ fn drop_half(rect: Rect, axis: Axis, after: bool) -> Rect {
 }
 
 /// Shorten a title for the tab strip, appending an ellipsis when clipped.
+/// Quote a filesystem path for the shell: single-quoted, with any embedded
+/// single quotes closed, escaped, and reopened.
+fn shell_quote(path: &str) -> String {
+    format!("'{}'", path.replace('\'', r"'\''"))
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -1938,7 +1983,17 @@ fn reorder_index(len: usize, src: usize, to: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::reorder_index;
+    use super::{reorder_index, shell_quote};
+
+    #[test]
+    fn shell_quote_wraps_and_escapes() {
+        assert_eq!(shell_quote("/tmp/plain.png"), "'/tmp/plain.png'");
+        assert_eq!(
+            shell_quote("/tmp/with space/img.png"),
+            "'/tmp/with space/img.png'"
+        );
+        assert_eq!(shell_quote("/tmp/it's.png"), r"'/tmp/it'\''s.png'");
+    }
 
     fn apply(list: &[u64], src: usize, to: usize) -> Vec<u64> {
         let mut v = list.to_vec();

@@ -568,6 +568,25 @@ fn draw_scrollbars(
     }
 }
 
+/// Pasted text as PTY bytes: wrapped in bracketed-paste markers when the
+/// application enabled mode 2004, so multi-line pastes arrive as one paste
+/// instead of being executed line by line. Marker sequences embedded in the
+/// pasted text are stripped so the paste can't terminate itself early.
+fn paste_bytes(backend: &TerminalBackend, text: &str) -> Vec<u8> {
+    if backend
+        .last_content()
+        .terminal_mode
+        .contains(TermMode::BRACKETED_PASTE)
+    {
+        let mut bytes = b"\x1b[200~".to_vec();
+        bytes.extend_from_slice(text.replace("\x1b[201~", "").as_bytes());
+        bytes.extend_from_slice(b"\x1b[201~");
+        bytes
+    } else {
+        text.as_bytes().to_vec()
+    }
+}
+
 fn process_keyboard_event(
     event: egui::Event,
     backend: &TerminalBackend,
@@ -579,7 +598,7 @@ fn process_keyboard_event(
         egui::Event::Paste(text) => InputAction::BackendCall(
             #[cfg(not(any(target_os = "ios", target_os = "macos")))]
             if modifiers.contains(Modifiers::COMMAND | Modifiers::SHIFT) {
-                BackendCommand::Write(text.as_bytes().to_vec())
+                BackendCommand::Write(paste_bytes(backend, &text))
             } else {
                 // Plain Ctrl+V belongs to the shell: send the literal ^V
                 // byte (terminal paste is Ctrl+Shift+V).
@@ -587,7 +606,7 @@ fn process_keyboard_event(
             },
             #[cfg(any(target_os = "ios", target_os = "macos"))]
             {
-                BackendCommand::Write(text.as_bytes().to_vec())
+                BackendCommand::Write(paste_bytes(backend, &text))
             },
         ),
         egui::Event::Copy => {

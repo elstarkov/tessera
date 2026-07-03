@@ -98,6 +98,83 @@ fn drag_across_first_row(ctx: &egui::Context, backend: &mut TerminalBackend) {
 }
 
 #[test]
+fn ctrl_v_reaches_the_app() {
+    let ctx = egui::Context::default();
+    let dump = std::env::temp_dir().join(format!("egui_term_ctrlv_{}.dump", std::process::id()));
+    let dump_path = dump.to_string_lossy().to_string();
+    // Clipboard-aware TUIs (e.g. Claude Code's image paste) receive Ctrl+V as
+    // the literal ^V byte and read the system clipboard themselves.
+    let mut backend = spawn_backend(
+        &ctx,
+        &format!("stty raw -echo; printf 'ready'; cat > '{dump_path}'"),
+    );
+    wait_for(&mut backend, "child ready", |b| {
+        b.last_content().grid.display_iter().any(|c| c.c == 'r')
+    });
+
+    // Warm-up frames so the widget exists and holds keyboard focus.
+    frame(&ctx, &mut backend, vec![]);
+    frame(&ctx, &mut backend, vec![]);
+    frame(
+        &ctx,
+        &mut backend,
+        vec![egui::Event::Key {
+            key: egui::Key::V,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        }],
+    );
+    std::thread::sleep(Duration::from_millis(300));
+
+    let dumped = std::fs::read(&dump).unwrap_or_default();
+    let _ = std::fs::remove_file(&dump);
+    assert!(
+        dumped.contains(&0x16),
+        "app never received ^V for Ctrl+V: {dumped:?}"
+    );
+}
+
+#[test]
+fn paste_is_bracketed_when_the_app_asks() {
+    let ctx = egui::Context::default();
+    let dump = std::env::temp_dir().join(format!("egui_term_paste_{}.dump", std::process::id()));
+    let dump_path = dump.to_string_lossy().to_string();
+    // Mode 2004: pasted text must arrive wrapped in \e[200~ .. \e[201~ so the
+    // app treats it as one paste instead of executing it line by line.
+    let mut backend = spawn_backend(
+        &ctx,
+        &format!("stty raw -echo; printf '\\033[?2004h ready'; cat > '{dump_path}'"),
+    );
+    wait_for(&mut backend, "bracketed paste mode", |b| {
+        b.last_content()
+            .terminal_mode
+            .intersects(TerminalMode::BRACKETED_PASTE)
+    });
+
+    frame(&ctx, &mut backend, vec![]);
+    frame(&ctx, &mut backend, vec![]);
+    frame(
+        &ctx,
+        &mut backend,
+        vec![egui::Event::Paste("line one\nline two".into())],
+    );
+    std::thread::sleep(Duration::from_millis(300));
+
+    let dumped = std::fs::read(&dump).unwrap_or_default();
+    let _ = std::fs::remove_file(&dump);
+    let received = String::from_utf8_lossy(&dumped);
+    assert!(
+        received.contains("\x1b[200~line one\nline two\x1b[201~"),
+        "paste was not bracketed: {received:?}"
+    );
+}
+
+#[test]
 fn drag_selects_without_mouse_mode() {
     let ctx = egui::Context::default();
     let mut backend = spawn_backend(&ctx, "printf 'plenty of words to select in row one'; cat");
