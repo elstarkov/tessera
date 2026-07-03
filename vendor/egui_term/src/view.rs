@@ -358,7 +358,7 @@ impl<'a> TerminalView<'a> {
                         Pos2::new(x, underline_height),
                         Pos2::new(x + cell_width, underline_height),
                     ],
-                    stroke: Stroke::new(cell_height * 0.15, fg).into(),
+                    stroke: Stroke::new(cell_height * 0.15, fg),
                 });
             }
 
@@ -371,14 +371,14 @@ impl<'a> TerminalView<'a> {
                         Pos2::new(x, underline_y),
                         Pos2::new(x + cell_width, underline_y),
                     ],
-                    stroke: Stroke::new((cell_height * 0.06).max(1.0), fg).into(),
+                    stroke: Stroke::new((cell_height * 0.06).max(1.0), fg),
                 });
             }
             if is_strikeout && !is_hidden {
                 let strike_y = y + cell_height * 0.5;
                 shapes.push(Shape::LineSegment {
                     points: [Pos2::new(x, strike_y), Pos2::new(x + cell_width, strike_y)],
-                    stroke: Stroke::new((cell_height * 0.06).max(1.0), fg).into(),
+                    stroke: Stroke::new((cell_height * 0.06).max(1.0), fg),
                 });
             }
 
@@ -702,6 +702,7 @@ fn process_mouse_wheel(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_button_click(
     state: &mut TerminalViewState,
     layout: &Response,

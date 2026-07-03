@@ -79,6 +79,7 @@ fn print_help() {
            Cmd+D          split right (panes side-by-side)\n  \
            Cmd+Shift+D    split down (panes stacked)\n  \
            Cmd+W          close the focused pane\n  \
+           Cmd+K          clear the terminal (scrollback + screen)\n  \
            Cmd+F          search the scrollback\n  \
            Cmd+Alt+Arrow  move focus between panes\n  \
            drag a border  resize the adjacent panes\n  \

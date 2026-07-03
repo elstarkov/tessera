@@ -278,14 +278,13 @@ pub fn parse_keyspec(s: &str) -> Option<KeySpec> {
     let (key_tok, mod_toks) = parts.split_last()?;
     let mut mods = Modifiers::default();
     for m in mod_toks {
-        mods = mods
-            | match m.to_lowercase().as_str() {
-                "cmd" | "command" | "super" | "win" | "meta" => Modifiers::COMMAND,
-                "ctrl" | "control" => Modifiers::CTRL,
-                "alt" | "opt" | "option" => Modifiers::ALT,
-                "shift" => Modifiers::SHIFT,
-                _ => return None,
-            };
+        mods |= match m.to_lowercase().as_str() {
+            "cmd" | "command" | "super" | "win" | "meta" => Modifiers::COMMAND,
+            "ctrl" | "control" => Modifiers::CTRL,
+            "alt" | "opt" | "option" => Modifiers::ALT,
+            "shift" => Modifiers::SHIFT,
+            _ => return None,
+        };
     }
     Some(KeySpec {
         mods,
