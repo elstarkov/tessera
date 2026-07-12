@@ -17,6 +17,21 @@ anyhow = "1.0"
 # installed font by name (no native deps).
 fontdb = "0.16"
 
+# Reroute the app menu's Quit item (Cmd+Q) into the window-close path so the
+# quit confirmation can intercept it. Same versions winit already pulls in.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-app-kit = { version = "0.2", features = [
+    "NSApplication",
+    "NSMenu",
+    "NSMenuItem",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+] }
+objc2-foundation = { version = "0.2", features = ["NSArray"] }
+raw-window-handle = "0.6"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

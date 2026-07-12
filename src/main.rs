@@ -10,6 +10,8 @@
 mod app;
 mod config;
 mod layout;
+#[cfg(target_os = "macos")]
+mod macos;
 
 use app::{Config, Tessera};
 use eframe::egui;

@@ -96,9 +96,16 @@ pub struct Tessera {
     /// pane area into the top chrome; re-tiling, tearing into a tab, and the
     /// float card all key off it. Set on press, cleared when the button lifts.
     pane_grip_down: Option<PaneId>,
+    /// True while the quit-confirmation dialog is up (Cmd+Q / window close).
+    confirm_quit: bool,
+    /// Set once the user confirms quitting, so the follow-up close request is
+    /// let through instead of being intercepted again.
+    quit_confirmed: bool,
 }
 
 const ACCENT: Color32 = Color32::from_rgb(102, 161, 255);
+/// Destructive-action fill (the quit dialog's confirm button).
+const DANGER: Color32 = Color32::from_rgb(210, 85, 85);
 const DIV_IDLE: Color32 = Color32::from_rgb(60, 62, 72);
 const DIV_HOT: Color32 = Color32::from_rgb(120, 150, 210);
 
@@ -187,7 +194,14 @@ impl Tessera {
             pad: Vec2::new(settings.padding.0, settings.padding.1),
             keybinds: settings.keybinds.clone(),
             pane_grip_down: None,
+            confirm_quit: false,
+            quit_confirmed: false,
         };
+        // Turn Cmd+Q into a window-close request so the quit confirmation in
+        // update() can intercept it (by default the menu's Quit item kills
+        // the process before the frame loop ever sees anything).
+        #[cfg(target_os = "macos")]
+        crate::macos::route_quit_through_close(cc);
         // First tab fills the window. If the shell can't spawn we can't do
         // anything useful, so fail loudly.
         let id = app
@@ -992,6 +1006,81 @@ impl Tessera {
         }
     }
 
+    /// The quit confirmation (Cmd+Q / the window's close button). While it's
+    /// open the panes are drawn unfocused, so Return and Escape land in the
+    /// dialog instead of a shell.
+    fn draw_quit_modal(&mut self, ctx: &egui::Context) {
+        if !self.confirm_quit {
+            return;
+        }
+        let shells = self.panes.len();
+        let tabs = self.tabs.len();
+        let detail = if shells == 1 {
+            "The open shell will be terminated".to_string()
+        } else if tabs == 1 {
+            format!("All {shells} open shells will be terminated")
+        } else {
+            format!("All {shells} open shells across {tabs} tabs will be terminated")
+        };
+        let resp = egui::Modal::new(Id::new("tessera_quit"))
+            .backdrop_color(Color32::from_black_alpha(130))
+            .frame(card_frame(elevate(self.bar_bg, 10)))
+            .show(ctx, |ui| {
+                ui.set_width(300.0);
+                ui.label(
+                    egui::RichText::new("Quit Tessera?")
+                        .strong()
+                        .size(15.0)
+                        .color(Color32::from_gray(236)),
+                );
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(detail)
+                        .size(11.5)
+                        .color(Color32::from_gray(140)),
+                );
+                ui.add_space(16.0);
+                let mut action: Option<bool> = None;
+                // Right-aligned, primary ("Quit") on the right per macOS.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if pill_button(ui, "Quit", DANGER, Color32::WHITE).clicked() {
+                        action = Some(true);
+                    }
+                    if pill_button(
+                        ui,
+                        "Cancel",
+                        Color32::from_white_alpha(14),
+                        Color32::from_gray(215),
+                    )
+                    .clicked()
+                    {
+                        action = Some(false);
+                    }
+                });
+                if ui.input(|i| i.key_pressed(Key::Enter)) {
+                    action = Some(true);
+                }
+                action
+            });
+        // Backdrop click or Escape cancels.
+        let action = if resp.should_close() {
+            Some(false)
+        } else {
+            resp.inner
+        };
+        match action {
+            Some(true) => {
+                // Let the follow-up close request through; the dialog stays up
+                // for the teardown frames so it doesn't flicker away first.
+                self.quit_confirmed = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Some(false) => self.confirm_quit = false,
+            None => {}
+        }
+    }
+
     /// Cmd+F scrollback search bar, floating at the top-right over the pane.
     fn draw_search_bar(&mut self, ctx: &egui::Context) {
         let Some(pane) = self.search.as_ref().map(|s| s.pane) else {
@@ -1133,8 +1222,20 @@ impl Tessera {
 impl eframe::App for Tessera {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_pty_events(ctx);
-        // While the rename popup is open, shortcuts are frozen too.
-        if self.editing.is_none() {
+        // A close request (Cmd+Q via the rerouted Quit menu item, or the
+        // window's close button) would quit the whole app: hold it and ask
+        // first. It passes through once the dialog confirms, or when the last
+        // pane already closed itself (`tabs` empty = the shells are gone, so
+        // there's nothing to protect).
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.quit_confirmed
+            && !self.tabs.is_empty()
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm_quit = true;
+        }
+        // While the rename or quit popup is open, shortcuts are frozen too.
+        if self.editing.is_none() && !self.confirm_quit {
             self.handle_shortcuts(ctx);
         }
         // Closing the last pane (Cmd+W, or `exit` / Ctrl-D in the last shell)
@@ -1193,13 +1294,13 @@ impl eframe::App for Tessera {
         let focused = self.tabs[active].focused;
         let theme = self.theme.clone();
         let font = self.font.clone();
-        // Renaming fully freezes pane focus (modal). Search shares focus: by
+        // The rename and quit dialogs fully freeze pane focus. Search shares focus: by
         // default the search field owns it, but once you click a pane the
         // terminal takes over so you can keep typing while search stays open.
-        let renaming = self.editing.is_some();
+        let modal_open = self.editing.is_some() || self.confirm_quit;
         let searching = self.search.is_some();
         let search_on_terminal = self.search.as_ref().is_some_and(|s| s.terminal_focused);
-        let panes_focusable = !renaming && (!searching || search_on_terminal);
+        let panes_focusable = !modal_open && (!searching || search_on_terminal);
 
         let frame = egui::Frame::default()
             .fill(window_bg)
@@ -1623,6 +1724,8 @@ impl eframe::App for Tessera {
         self.draw_search_bar(ctx);
         // Rename popup on top of everything (panes are unfocused while it's open).
         self.draw_rename_modal(ctx);
+        // Quit confirmation, same treatment.
+        self.draw_quit_modal(ctx);
     }
 }
 
