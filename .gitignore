@@ -12,6 +12,9 @@
 /perf.data
 /perf.data.old
 
+# Demo video (upload material rendered from assets/demo.gif, not shipped in the repo)
+/assets/demo.mp4
+
 # macOS
 .DS_Store
 
