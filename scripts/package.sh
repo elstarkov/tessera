@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
 #
 # Build Tessera.app (a real macOS application bundle) from the Rust binary,
-# generate its .icns icon from assets/icon.svg, ad-hoc code-sign it, and
-# optionally wrap it in a .dmg.
+# generate its .icns icon from assets/icon.svg, code-sign it, and optionally
+# wrap it in a .dmg.
 #
 # Usage:
 #   scripts/package.sh           # build dist/Tessera.app
 #   scripts/package.sh --dmg     # also build dist/Tessera.dmg
+#
+# Signing: uses the first "Developer ID Application" identity in the keychain
+# (override with TESSERA_SIGN_IDENTITY), falling back to an ad-hoc signature —
+# fine locally, but downloads of an ad-hoc build are blocked by Gatekeeper.
+#
+# Notarization (removes the Gatekeeper block for distribution): store
+# credentials once with
+#   xcrun notarytool store-credentials <profile> --apple-id <id> --team-id <team>
+# then
+#   TESSERA_NOTARY_PROFILE=<profile> scripts/package.sh --dmg
 #
 # Everything is produced under ./dist (git-ignored). Drag the .app to
 # /Applications, then pin it to the Dock.
@@ -82,15 +92,32 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "==> 4/4  Ad-hoc code-sign (lets it run locally; not for distribution)"
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || \
-  echo "    ! ad-hoc sign failed (non-fatal)"
+SIGN_IDENTITY="${TESSERA_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \
+  | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)}"
+if [ -n "$SIGN_IDENTITY" ]; then
+  echo "==> 4/4  Code-sign  ($SIGN_IDENTITY)"
+  # Hardened runtime + secure timestamp are notarization requirements.
+  codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$APP"
+else
+  echo "==> 4/4  Ad-hoc code-sign (lets it run locally; not for distribution)"
+  codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || \
+    echo "    ! ad-hoc sign failed (non-fatal)"
+fi
 touch "$APP"  # nudge Finder to refresh the icon
 
 if [ "${1:-}" = "--dmg" ]; then
   echo "==> +    Disk image  $DIST/$APP_NAME.dmg"
   hdiutil create -volname "$APP_NAME" -srcfolder "$APP" \
     -ov -format UDZO "$DIST/$APP_NAME.dmg" >/dev/null
+  # Sign the disk image itself too, so the whole artifact chain verifies.
+  [ -n "$SIGN_IDENTITY" ] && \
+    codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DIST/$APP_NAME.dmg"
+  if [ -n "${TESSERA_NOTARY_PROFILE:-}" ]; then
+    echo "==> +    Notarize + staple  (profile: $TESSERA_NOTARY_PROFILE)"
+    xcrun notarytool submit "$DIST/$APP_NAME.dmg" \
+      --keychain-profile "$TESSERA_NOTARY_PROFILE" --wait
+    xcrun stapler staple "$DIST/$APP_NAME.dmg"
+  fi
 fi
 
 echo
