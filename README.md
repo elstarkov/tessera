@@ -70,6 +70,25 @@ is a real terminal running a real shell (or `tmux`).
 | right-click a tab | Set its colour |
 | drag a tab | Reorder it in the strip, or drop on a pane to merge |
 
+## Download (macOS)
+
+Grab `Tessera.dmg` from the
+[latest release](https://github.com/elstarkov/tessera/releases/latest), open
+it, and drag **Tessera.app** to `/Applications`. The binary is universal
+(Apple Silicon + Intel) and runs on macOS 11+.
+
+The app is ad-hoc signed - there's no Apple Developer ID behind it - so macOS
+warns that it can't verify the app on first launch. Right-click **Tessera.app**
+→ **Open** → **Open**; on macOS 15 and later, launch it once, then allow it
+under **System Settings → Privacy & Security → Open Anyway**. Or clear the
+quarantine flag from a terminal instead:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Tessera.app
+```
+
+Building from source (below) skips the Gatekeeper dance entirely.
+
 ## Run it
 
 Run Tessera straight from source - all you need is the
